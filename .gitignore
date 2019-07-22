@@ -1,0 +1,163 @@
+# Generated code by ExaHyPE
+*_generated.cpp
+cfiles.mk
+buildinfo.h
+
+# Any kind of log files created by some editors
+# (swap files or temporary files)
+*~
+[._]*.s[a-w][a-z]
+[._]s[a-w][a-z]
+*.backup
+
+# IDE project files: Eclipse, Kdevelop
+.cproject
+.project
+.settings
+.directory
+.kdev4
+*.kdev4
+
+# Python compiled files
+*.pyc
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Output
+*.vtk
+*.vtu
+*.pvd
+*.log-file
+*.png
+*.webm
+*.svg
+
+# Any kind of archives
+*.zip
+*.tar.gz
+*.tar.gzip
+*.tar.bzip
+
+#Toolkit binaries
+Toolkit/dist
+ExaHyPE.jar
+
+# Peano directories:
+# As Peano ships it own .gitignore, this must be stated
+# here. Note also that Peano is managed with subversion
+Peano/peano-ExplicitEulerForHeatEquation-asserts
+Peano/files.mk
+Peano/.svn
+Peano/.cvsignore
+Peano/.gitignore
+Peano/peano.doxygen-configuration
+Peano/src.doxys
+Peano/sharedmemoryoracles.tar.gz
+Peano/doxygen-html/
+Peano/toolboxes/
+# the Dilbert patch for peano, https://github.com/svenk/dilbert
+Peano/dilbert
+
+# libXSMM
+libxsmm
+Libxsmm
+
+# Out-of-Tree builds
+Builds/
+
+# Simulations, if so
+Simulations
+
+# Optimised Kernels. They are stored in the wrong place for my feeling.
+ExaHyPE/kernels/aderdg/optimised/
+
+# Softlinks to the ExaHyPE-Astro repository
+AstroApplications
+ExternalLibraries
+AstroBenchmarks
+
+# Logs and other typical output of runs
+*.log
+*output*
+*.out-exahype
+
+# There are people storing LaTeX in the main repository, so these
+# files are LaTeX output.
+*.aux
+*.lof
+*.log
+*.lot
+*.fls
+*.out
+*.toc
+*.fmt
+*.fot
+*.cb
+*.cb2
+*.dvi
+*.pdf
+*.ptc
+*.acn
+*.acr
+*.glg
+*.glo
+*.gls
+*.glsdefs
+*.lol
+*.idx
+*.ilg
+*.ind
+*.ist
+*.synctex.gz
+
+# Coredumps
+core
+/build/
+
+# Submodules
+Submodules
+
+# Submodules
+Submodules/
+
+# They hold no useful information, do they?
+README_generated.md
+
+.vscode
+.pydevproject
+
+# Rendering or simliar, raw data files, movies
+*.h5
+*.hdf5
+*.jpg
+*.png
+*.avi
+*.mp4
+*.webm
