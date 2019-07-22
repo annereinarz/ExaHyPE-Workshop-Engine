@@ -15,7 +15,7 @@ class Configuration:
     pathToJinja2        = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "Submodules", "jinja"))
     
     # absolute path to markupsafe (jinja2 dependency)
-    pathToMarkupsafe    = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "Submodules", "markupsafe"))
+    pathToMarkupsafe    = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "Submodules", "markupsafe", "src"))
     
     # absolute path to the codegenerator module
     pathToCodegenerator = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "CodeGenerator"))

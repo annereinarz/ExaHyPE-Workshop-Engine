@@ -18,7 +18,7 @@ class Configuration:
     pathToJinja2               = os.path.abspath(os.path.join(pathToExaHyPERoot, "Submodules", "jinja"))
     
     # path to markupsafe
-    pathToMarkupsafe           = os.path.abspath(os.path.join(pathToExaHyPERoot, "Submodules", "markupsafe"))
+    pathToMarkupsafe           = os.path.abspath(os.path.join(pathToExaHyPERoot, "Submodules", "markupsafe", "src"))
     
     # simd size of the accepted architectures
     simdWidth = { "noarch" : 1,
