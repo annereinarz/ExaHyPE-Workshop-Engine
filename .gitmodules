@@ -1,0 +1,23 @@
+[submodule "Submodules/jinja"]
+	path = Submodules/jinja
+	url = https://github.com/pallets/jinja.git
+[submodule "Submodules/markupsafe"]
+	path = Submodules/markupsafe
+	url = https://github.com/pallets/markupsafe.git
+[submodule "Submodules/libxsmm"]
+	path = Submodules/libxsmm
+	url = https://github.com/hfp/libxsmm.git
+	ignore = dirty #deleted documentation and sample + build
+[submodule "Submodules/attrs"]
+	path = Submodules/attrs
+	url = https://github.com/python-attrs/attrs.git
+[submodule "Submodules/pyrsistent"]
+	path = Submodules/pyrsistent
+	url = https://github.com/tobgu/pyrsistent.git
+[submodule "Submodules/jsonschema"]
+	path = Submodules/jsonschema
+	url = https://github.com/Julian/jsonschema.git
+	ignore = dirty #modified __init__.py + __pycache__
+[submodule "Submodules/six"]
+	path = Submodules/six
+	url = https://github.com/benjaminp/six.git
