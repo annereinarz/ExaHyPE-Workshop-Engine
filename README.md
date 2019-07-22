@@ -7,8 +7,7 @@ This is the main repository of the ExaHyPE teaching code project.
 On Ivy muc we have to load several modules. Copy this to your .bashrc
 
     module switch intel/19.0
-    module unload mpi.intel/2019
-    module load mpi.intel/2019
+    module switch mpi.intel/2019
     module load tbb/2019
     module load python/3.6_intel
     module load gcc
