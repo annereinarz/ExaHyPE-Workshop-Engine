@@ -1,0 +1,144 @@
+{#
+  This is a specfile template for mexa in the jinja2 templating language.
+  
+  We need this circumvention of a template due to the specific order
+  of the parameters needed in an ExaHyPE specfile as well as the
+  weird non-treeish language features.
+  
+  Some paradigms of this template are the following:
+  
+   * The Java specfile parser requires all arguments to be exactly in a given order.
+     While the mexa language is able to preserve order, it does not require the input
+     to be given in the same order. This is the main reason for this template.
+   * Template data are given as nested dictionaries.
+   * Some special filters are used for convenience.
+   * All comments are optional and can be specified by (multiline)
+     strings in the ingoing mexa file.
+   * The Java specfile parser is sometimes finicky about number formats, i.e. it does
+     not accept "1" where it expects a float, so "1.0" must be given.
+     Such requirements are fulfilled by the template.
+
+  Some Jinja tipps:
+  
+   * To debug a variable, write {{ something|pprint }}
+
+  (c) 2017, 2018 SvenK for exahype.eu (GPL/BSD)
+
+-#}
+exahype-project {{ project_name }}
+
+  peano-kernel-path const  = {{ paths.peano_kernel_path }}
+  exahype-path const       = {{ paths.exahype_path }}
+  output-directory const   = {{ paths.output_directory }}
+  architecture const       = {{ architecture }}
+  {% if log_file is defined -%}
+  log-file                 = {{ log_file }}
+  {% endif -%}
+  
+  computational-domain
+    dimension const  = {{ computational_domain.dimension }}
+    width            = {{ computational_domain.width|tolist|asfloat|join(", ") }}
+    offset           = {{ computational_domain.offset|tolist|asfloat|join(", ") }}
+    end-time         = {{ computational_domain.end_time|asfloat }}
+  end computational-domain
+
+  shared-memory
+    identifier       = {{ shared_memory.identifier }}
+    configure        = {}
+    cores            = {{ shared_memory.cores }}
+    properties-file  = {{ shared_memory.properties_file }}
+  end shared-memory  
+  
+  distributed-memory
+    identifier       = {{ distributed_memory.identifier }}
+    configure        = {{ distributed_memory.configure }}
+    buffer-size      = {{ distributed_memory.buffer_size }}
+    timeout          = {{ distributed_memory.timeout }}
+  end distributed-memory
+
+  global-optimisation
+    fuse-algorithmic-steps          = {{ optimisation.fuse_algorithmic_steps }}
+    fuse-algorithmic-steps-factor   = {{ optimisation.fuse_algorithmic_steps_factor }}
+    spawn-predictor-as-background-thread = {{ optimisation.spawn_predictor_as_background_thread }}
+    spawn-amr-background-threads = {{ optimisation.spawn_amr_background_threads }}
+    disable-vertex-exchange-in-time-steps = {{ optimisation.disable_vertex_exchange_in_time_steps }}
+    time-step-batch-factor           = {{ optimisation.timestep_batch_factor }}
+    disable-metadata-exchange-in-batched-time-steps = {{ optimisation.disable_metadata_exchange_in_batched_time_steps }}
+    double-compression = {{ optimisation.double_compression }}
+    spawn-double-compression-as-background-thread = {{ optimisation.spawn_double_compression_as_background_thread }}
+  end global-optimisation
+
+  {% for solver in solvers|tolist -%}
+  solver {{solver.type}} {{solver.name}}
+    variables const    = {{ solver.variables }}
+
+    {%-  if solver.type == "Finite-Volumes" %}
+    patch-size const   = {{ solver.patch_size }}
+    {% elif solver.type == "ADER-DG" %}
+    order const        = {{ solver.order }}
+    {% elif solver.type == "Limiting-ADER-DG" %}
+    order const        = {{ solver.order }}
+    {% else %}
+       {{ error("Invalid solver.type: " ~ solver.type) }}
+    {% endif -%}
+    {# #}
+    maximum-mesh-size  = {{ solver.maximum_mesh_size|as_float }}
+    maximum-mesh-depth = {{ solver.maximum_mesh_depth }}
+    time-stepping      = {{ solver.time_stepping}} 
+    type const         = {{ solver.kernel.type }}
+    terms const        = {{ solver.kernel.terms }}
+    optimisation const = {{ solver.kernel.optimisation }}
+    language const     = {{ solver.kernel.language }}
+
+    {%- if solver.type == "Limiting-ADER-DG" %}
+    limiter-type const             = {{ solver.limiter.kernel.type }}
+    limiter-optimisation const     = {{ solver.limiter.kernel.optimisation }}
+    limiter-language const         = {{ solver.limiter.kernel.language }}
+    dmp-observables const          = {{ solver.limiter.dmp_observables }}
+    dmp-relaxation-parameter       = {{ solver.limiter.dmp_relaxation_parameter }}
+    dmp-difference-scaling         = {{ solver.limiter.dmp_difference_scaling }}
+    {% endif -%}
+    {# #}
+
+    {% if "constants" in solver -%}
+    {#- We had this kind of generic comment here before:
+    // Note, if this constant string does not run throught the toolkit, try to remove parts of it
+    // until it runs. Then try to replace these parts. For instance, you must not use certain keywords
+    // for identifiers or values, such as the keyword "parameters".
+    // You can also choose to encode all constants as BASE64 or similar to avoid problems with the
+    // restrictive toolkit specfile grammar.
+    Instead, support any kind of user-given comment:
+    -#}
+    {%- if specfile_constants_comment is defined -%}
+    {%- for line in specfile_constants_comment|tolist -%}
+    // {{line}}
+    {% endfor %}
+    {% endif -%}
+    constants          = {{ solver.constants|link_in_list|indent(width=25) }}
+    {% endif -%}
+
+    {% for plotter in solver.plotters|tolist %}
+    plot {{plotter.type}} {{plotter.name}}
+      variables const = {{plotter.variables|count_variables }}
+      time      = {{plotter.time}}
+      repeat    = {{plotter.repeat}}
+      output    = {{plotter.output}}
+      {%- if "parameters" in plotter %}
+      select    = {{ plotter.parameters|link_in_list|indent(width=18) }}
+      {%- elif "select" in plotter %}
+      select    = {{plotter.select}}
+      {%- endif %}
+    end plot
+    {% endfor %}
+  end solver
+  {%- endfor %}
+end exahype-project
+
+{%- if specfile_end_comment is defined %}
+/**
+ {%- for line in specfile_end_comment|tolist %}
+ * {{line}}
+ {%- endfor %}
+ **/
+{% endif %}
+{% endfor %}

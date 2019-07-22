@@ -1,0 +1,257 @@
+{
+  "project_name": "GRMHD",
+  "paths": {
+    "output_directory": "ApplicationExamples/GRMHD/GRMHD_cpp",
+    "peano_kernel_path": "./Peano",
+    "log_file": "whatever.log",
+    "exahype_path": "./ExaHyPE"
+  },
+  "architecture": "noarch",
+  "computational_domain": {
+    "dimension": 2,
+    "width": [ 20, 20, 20 ],
+    "offset": [ 0, 0, 0 ],
+    "end_time": 20
+  },
+  "shared_memory": {
+    "cores": 1,
+    "autotuning_strategy": "dummy",
+    "properties_file": "sharedmemory.properties"
+  },
+  "distributed_memory": {
+    "load_balancing_type": "static",
+    "load_balancing_strategy" : "hotspot",
+    "node_pool_strategy" : "fair",
+    "ranks_per_node": 1,
+    "timeout": 60,
+    "buffer_size": 64
+  },
+  "optimisation": {
+    "fuse_algorithmic_steps" : false,
+    "fuse_algorithmic_steps_factor" : 0.99,
+    "spawn_predictor_as_background_thread" : false,
+    "spawn_amr_background_threads" : false,
+    "disable_vertex_exchange_in_time_steps" : true,
+    "time_step_batch_factor" : 0.8,
+    "disable_metadata_exchange_in_batched_time_steps" : false,
+    "double_compression" : 0.0,
+    "spawn_double_compression_as_background_thread" : false
+  },
+  "solvers": [
+    {
+      "name": "GRMHDSolver_ADERDG",
+      "type": "ADER-DG",
+      "variables": [
+        { "name": "rho",         "multiplicity": 1 },
+        { "name": "vel",         "multiplicity": 3 },
+        { "name": "E",           "multiplicity": 1 },
+        { "name": "B",           "multiplicity": 3 },
+        { "name": "psi",         "multiplicity": 1 },
+        { "name": "lapse",       "multiplicity": 1 },
+        { "name": "shift",       "multiplicity": 3 },
+        { "name": "gij",         "multiplicity": 6 },
+        { "name": "coordinates", "multiplicity": 3 },
+        { "name": "check",       "multiplicity": 1 }
+      ],
+      "material_parameters": [
+        { "name": "test",         "multiplicity": 3 }
+      ],
+      "global_observables": 1,
+      "point_sources": [
+        [ 0.0, 0.0, 0.0 ],
+        [ 0.5, 0.5, 0.5 ]
+      ],
+      "order": 3,
+      "maximum_mesh_size": 5.0,
+      "maximum_mesh_depth": 0,
+      "time_stepping": "global",
+      "aderdg_kernel": {
+        "implementation": "generic",
+        "space_time_predictor" : { "maxpicarditer" : 1 },
+        "terms": [ "flux", "ncp", "source", "point_sources" ],
+        "language" : "C",
+        "nonlinear"  : true,
+        "basis" : "Lobatto"
+      },
+      "plotters": [
+        {
+          "name": "ConservedWriter",
+          "type": "vtk::Cartesian::vertices::ascii",
+          "output": "./vtk-output/conserved",
+          "variables": 17,
+          "repeat": 0.001,
+          "time": 0
+        },
+        {
+          "type": [ "vtk", "Cartesian", "vertices", "ascii" ],
+          "output": "./vtk-output/primitive",
+          "variables": 3,
+          "repeat": 0.001,
+          "name": "PrimitiveWriter",
+          "time": 0,
+          "select": {
+            "x": 15,
+            "z": 2.0
+          },
+          "parameters": {
+            "postprocess": "gzip",
+            "surface_integral_radii": [
+              200,
+              300,
+              500
+            ],
+            "apparent_horizon_finder": {
+              "find_every": 0.4,
+              "output_h_every": 0,
+              "max_Newton_iterations__initial": 50,
+              "max_allowable_Theta_growth_iterations": 10,
+              "geometry_interpolator_name": "Lagrange polynomial interpolation",
+              "geometry_interpolator_pars": {
+                "order": 4
+              },
+              "verbose_level": "physics highlights",
+              "move_origins": true,
+              
+              "horizons": [
+                {
+                  "origin_x": 0.0,
+                  "initial_guess__coord_sphere": {
+                    "center": [ 0,0,0],
+                    "radius": 3.0
+                  },
+                  "which_surface_to_store_info": 0,
+                  "set_mask_for_individual_horizon": false,
+                  "reset_horizon_after_not_finding": false,
+                  "find_after_individual_time": 0,
+                  "max_allowable_horizon_radius": 5.0
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "parameters": {
+        "refinement" : {
+          "criterion": "algebraic",
+          "radius": 15.0
+        },
+        "limiter": {
+          "valid_alp_max": "unlimited",
+          "valid_alp_min": 0.01,
+          "criterion": "dynamical_lapse"
+        },
+        "ccz4": {
+          "mu": 0.2,
+          "c": 1,
+          "xi": 1,
+          "e": 1,
+          "g": 0,
+          "f": 1,
+          "sk": 1,
+          "k3": 0.1,
+          "k2": 0.1,
+          "k1": 0.02,
+          "eta": 1,
+          "itau": 0,
+          "bs": 1,
+          "ds": 1,
+          "lapsetype": 1
+        },
+        "initialdata": {
+          "name": "uiuc",
+          "par_p": [ 0, 0, 0 ],
+          "beta_r_x0": 0.25,
+          "lapse_type": 4,
+          "par_chi": 0.95,
+          "center_offset": [ 0, 0.025, 0.025 ],
+          "beta_r_interior": 0,
+          "bh_gauge_choice": 0,
+          "shift_type": 0,
+          "beta_r_w": -1,
+          "par_m": 2,
+          "avoid_puncture": "yes"
+        },
+        "typical_other_variables": {
+          "n_body_tracker": {
+            "analyze_every": 15.5,
+            "merge_seperation": 1.5,
+            "collapse_seperation": -1,
+            "initial_positions": [
+              [ 0, 0,  20 ],
+              [ 0, 0, -20 ]
+            ]
+          },
+          
+          "nan_checker": {
+            "check_every": 2048,
+            "check_vars": [ "rho", "vel", "psi", "lapse "],
+            "action_if_found": "terminate"
+          },
+          
+          "initial_data": {
+            "eos_file": "/home/hpc/pr27ju/di25cux4/work/id/bns/bnslt-eos-db/@EOS@/@EOS@.pizza",
+            "loreneid": {
+              "lorene_bns_file": "/home/hpc/pr27ju/di25cux4/work/id/bns/bnslt-eos-db/@EOS@/m@MASS@/resu.d",
+              "link_dummy_eos": true,
+              "length_unit": 1476.71663
+            }
+          },
+          
+          "weylscalar4": {
+            "offset": 1e-8,
+            "verbose": true
+          },
+          
+          "multipole": {
+            "radii": [ 200, 250, 300, 350, 400, 450, 500 ],
+            "ntheta": 120,
+            "nphi": 240,
+            "variables": {
+              "psi4r": {
+                "sw": -2,
+                "cmplx": "psi4i",
+                "name": "Psi4"
+              }
+            },
+            "lmax": 4
+          },
+          
+          "sphericalsurface": {
+            "maxntheta": 140,
+            "maxnphi": 240,
+            "surfaces": [
+              {
+                "ntheta": 55,
+                "nphi": 96,
+                "nghosttheta": 2,
+                "nghostphi": 2
+              }, 
+              {
+                "ntheta": 55,
+                "nphi": 96,
+                "nghosttheta": 2,
+                "nghostphi": 2
+              },
+              {
+                "ntheta": 55,
+                "nphi": 96,
+                "nghosttheta": 2,
+                "nghostphi": 2,
+                "set_spherical": true,
+                "radius": 100
+              },
+              {
+                "ntheta": 55,
+                "nphi": 96,
+                "nghosttheta": 2,
+                "nghostphi": 2,
+                "set_spherical": true,
+                "radius": 150
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

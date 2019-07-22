@@ -1,0 +1,105 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/
+
+#include <tarch/la/Vector.h>
+
+#include "../../../../KernelUtils.h"
+#include "kernels/aderdg/generic/Kernels.h"
+
+#if DIMENSIONS == 3
+
+template <int numberOfVariables, int basisSize>
+void kernels::aderdg::generic::c::faceIntegralNonlinear(
+                              double *lduh, const double *const lFhbnd,
+                              const int direction, const int orientation,
+                              const tarch::la::Vector<DIMENSIONS, double> &dx) {
+  constexpr int order = basisSize - 1;
+
+  const double scaling = 1.0/dx[direction] * (2.0*orientation-1.0); // orientation \in {0,1}
+  
+  idx4 idx_lduh(basisSize, basisSize, basisSize, numberOfVariables); // (z,y,x,var/par)
+  idx3 idx_lFhbnd(basisSize, basisSize, numberOfVariables);
+  // x-faces: (z,y,var/par)
+  // y-faces: (z,x,var/par)
+  // z-faces: (y,x,var/par)
+  
+  switch (direction) {
+    case 0:   // x faces
+      for (int i = 0; i < basisSize; i++) { // z
+        for (int j = 0; j < basisSize; j++) { // y
+          for (int k = 0; k < basisSize; k++) { // x
+            const double scaledWeight =
+                kernels::gaussLegendreWeights[order][i] *
+                kernels::gaussLegendreWeights[order][j] *
+                scaling;
+
+            // left flux minus right flux
+            for (int l = 0; l < numberOfVariables; l++) {
+              lduh[idx_lduh(i, j, k, l)] -=
+                  scaledWeight *
+                  kernels::FCoeff[order][orientation][k] *
+                  lFhbnd[idx_lFhbnd(i, j, l)];
+            }
+          }
+        }
+      }
+      break;
+    case 1: // y faces
+      for (int i = 0; i < basisSize; i++) { // z
+        for (int j = 0; j < basisSize; j++) { // y
+          for (int k = 0; k < basisSize; k++) { // x
+            const double scaledWeight =
+                kernels::gaussLegendreWeights[order][i] *
+                kernels::gaussLegendreWeights[order][k] *
+                scaling;
+
+            // back flux minus front flux
+            for (int l = 0; l < numberOfVariables; l++) {
+              lduh[idx_lduh(i, j, k, l)] -=
+                      scaledWeight *
+                      kernels::FCoeff[order][orientation][j] *
+                      lFhbnd[idx_lFhbnd(i, k, l)];
+            }
+          }
+        }
+      }
+      break;
+    case 2: // z faces
+      for (int i = 0; i < basisSize; i++) { // z
+        for (int j = 0; j < basisSize; j++) { // y
+          for (int k = 0; k < basisSize; k++) { // x
+            const double scaledWeight =
+                kernels::gaussLegendreWeights[order][j] *
+                kernels::gaussLegendreWeights[order][k] *
+                scaling;
+
+            // bottom flux minus top flux
+            for (int l = 0; l < numberOfVariables; l++) {
+              lduh[idx_lduh(i, j, k, l)] -=
+                  scaledWeight *
+                  kernels::FCoeff[order][orientation][i] *
+                  lFhbnd[idx_lFhbnd(j, k, l)];
+            }
+          }
+        }
+      }
+      break;
+    default:
+      static tarch::logging::Log _log("kernels::aderdg::generic::c");
+      logError("faceIntegralNonlinear(...)","Coordinate direction must not be greater than 1 in 2D.");
+      std::terminate();
+      break;
+  }
+}
+
+#endif  // DIMENSIONS == 3

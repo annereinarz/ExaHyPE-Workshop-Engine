@@ -1,0 +1,54 @@
+#include "peano/utils/Loop.h"
+#include "matrixfree/stencil/ElementMatrix.h"
+
+
+template <int p, int N>
+tarch::la::Matrix<N*N,N*N,double>  matrixfree::stencil::BSplinesStencilFactory::getElementWiseAssemblyMatrix(
+  tarch::la::Vector<2*p+1,double> stencilX[N],
+  tarch::la::Vector<2*p+1,double> stencilY[N]
+) {
+  tarch::la::Matrix<N*N,N*N,double>  result(0.0);
+
+  d2for(row,N)
+    tarch::la::Vector<2,int> relativeIntegrationElement = tarch::la::Vector<2,int>(N) - 1 - row;
+    tarch::la::Vector<(2*p+1)*(2*p+1),double> rowStencil = stencilProduct(
+        stencilX[relativeIntegrationElement(0)],
+        stencilY[relativeIntegrationElement(1)]
+      );
+    d2for(col,N)
+      tarch::la::Vector<2,int> stencilEntry = tarch::la::Vector<2,int>((2*p+1)/2) + col - row;
+      if ( tarch::la::allGreaterEquals(stencilEntry,0) && tarch::la::allSmaller(stencilEntry,2*p+1) ) {
+        int linearisedStencilEntry = peano::utils::d2Linearised(stencilEntry,2*p+1);
+        result(rowScalar,colScalar) = rowStencil(linearisedStencilEntry);
+      }
+    enddforx
+  enddforx
+  return result;
+}
+
+
+template <int p, int N>
+tarch::la::Matrix<N*N*N,N*N*N,double>  matrixfree::stencil::BSplinesStencilFactory::getElementWiseAssemblyMatrix(
+  tarch::la::Vector<2*p+1,double> stencilX[N],
+  tarch::la::Vector<2*p+1,double> stencilY[N],
+  tarch::la::Vector<2*p+1,double> stencilZ[N]
+) {
+  tarch::la::Matrix<N*N*N,N*N*N,double>  result(0.0);
+
+  d3for(row,N)
+    tarch::la::Vector<3,int> relativeIntegrationElement = tarch::la::Vector<3,int>(N) - 1 - row;
+    tarch::la::Vector<(2*p+1)*(2*p+1)*(2*p+1),double> rowStencil = stencilProduct(
+        stencilX[relativeIntegrationElement(0)],
+        stencilY[relativeIntegrationElement(1)],
+        stencilZ[relativeIntegrationElement(2)]
+      );
+    d3for(col,N)
+      tarch::la::Vector<3,int> stencilEntry = tarch::la::Vector<3,int>((2*p+1)/2) + col - row;
+      if ( tarch::la::allGreaterEquals(stencilEntry,0) && tarch::la::allSmaller(stencilEntry,2*p+1) ) {
+        int linearisedStencilEntry = peano::utils::d3Linearised(stencilEntry,2*p+1);
+        result(rowScalar,colScalar) = rowStencil(linearisedStencilEntry);
+      }
+    enddforx
+  enddforx
+  return result;
+}

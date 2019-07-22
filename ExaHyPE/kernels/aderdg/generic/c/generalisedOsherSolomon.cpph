@@ -1,0 +1,98 @@
+/**
+* This file is part of the ExaHyPE project.
+* Copyright (c) 2016  http://exahype.eu
+* All rights reserved.
+*
+* The project has received funding from the European Union's Horizon
+* 2020 research and innovation programme under grant agreement
+* No 671698. For copyrights and licensing, please consult the webpage.
+*
+* Released under the BSD 3 Open Source License.
+* For the full license text, see LICENSE.txt
+**/
+
+// included in ../../Kernels.h
+
+#include <algorithm>
+#include <cassert>
+#include <cmath>
+#include <cstring>
+
+#include "kernels/KernelUtils.h"
+#include "kernels/GaussLegendreQuadrature.h"
+#include "kernels/RiemannSolverUtils.h"
+
+namespace kernels {
+namespace aderdg {
+namespace generic {
+namespace c {
+
+/**
+* We implement a very simple Rusanov scheme with scalar dissipation
+* (smax*Id).
+*
+* We need to consider material parameters
+* in QL and QR.
+* We don't need to consider material parameters
+* in FL,FR.
+*/
+template <bool useNCP, bool useFlux, int numQuadPoints, typename SolverType>
+void generalisedOsherSolomon(
+    SolverType&         solver,
+    double* const       FL,
+    double* const       FR,
+    const double* const QL,
+    const double* const QR,
+    const double        t,
+    const double        dt,
+    const int           direction) {
+  constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int numberOfData       = numberOfVariables+numberOfParameters;
+  constexpr int order              = SolverType::Order;
+  constexpr int basisSize          = order+1;
+
+  // Compute the average variables and parameters from the left and the right
+  double QavL[numberOfData] = {0.0};
+  double QavR[numberOfData] = {0.0};
+  kernels::riemannsolvers::util::averageRiemannInputs<basisSize,numberOfData>(
+      QL,kernels::gaussLegendreWeights,QavL);
+  kernels::riemannsolvers::util::averageRiemannInputs<basisSize,numberOfData>(
+      QR,kernels::gaussLegendreWeights,QavR);
+  
+  double osherMatrix[numberOfVariables][numberOfVariables] = {0.0}; // fill with zeroes
+  double osherNCP[numberOfVariables] = {0.0};                       // fill with zeroes
+  
+  kernels::riemannsolvers::util::computeOsherMatrix<useNCP,
+    useFlux,numberOfVariables,numberOfParameters,numQuadPoints,SolverType>(
+        solver,QavL,QavR,direction,osherMatrix,osherNCP);
+
+  // compute fluxes (and fluctuations for non-conservative PDEs)
+  idx3 idx_FLR(basisSize, basisSize, numberOfVariables);
+  idx3 idx_QLR(basisSize, basisSize, numberOfData);
+
+  for (int i = 0; i < basisSize; i++) {
+    for (int j = 0; j < basisSize; j++) {
+      // skip parameters
+      for (int k = 0; k < numberOfVariables; k++) {
+        if(useFlux) {
+          FL[idx_FLR(i, j, k)] = 0.5 * (FR[idx_FLR(i, j, k)] + FL[idx_FLR(i, j, k)]);
+          for (int a = 0; a < numberOfVariables; a++) {
+            FL[idx_FLR(i, j, k)] -= 0.5 * osherMatrix[k][a] * (QR[idx_QLR(i, j, a)] - QL[idx_QLR(i, j, a)]);
+          }
+        }
+        if(useNCP) {
+          FR[idx_FLR(i, j, k)] = FL[idx_FLR(i, j, k)] - 0.5 * osherNCP[k];
+          FL[idx_FLR(i, j, k)] = FL[idx_FLR(i, j, k)] + 0.5 * osherNCP[k];
+        } else {
+          FR[idx_FLR(i, j, k)] = FL[idx_FLR(i, j, k)];
+        }
+      }
+    }
+  }
+}
+
+}  // namespace c
+}  // namespace generic
+}  // namespace aderdg
+}  // namespace kernels

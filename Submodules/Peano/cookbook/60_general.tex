@@ -1,0 +1,36 @@
+\section{General remarks}
+
+\chapterDescription
+  {
+    Most remarks take less then 20 minutes.
+  }
+  {
+    Working serial code.
+  }
+
+
+\subsection{Quick ('n not so dirty)}
+
+\noindent
+Peano by default keeps track of many grid statistics if you compile with
+\texttt{-DTrackGridStatistics}.
+For many codes, this is kind of an overkill: they do not require the whole
+computer to keep track of all cells and vertices all the time, or, if they need
+such data, they require more precise data; data also distinguishing more vertex
+types than outer, inner, boundary, e.g.
+
+If you don't need the state's getters on mesh width, number of vertices, and so
+forth, try a recompile without \texttt{-DTrackGridStatistics}.
+
+
+\subsection{Tailor your event specifications}
+
+Before you start any optimisation, please run through all your mappings. 
+Each mapping has a couple of specification routines that tells Peano whether
+you have implemented the corresponding event, on which data is works (all
+scales or only the leaves).
+It is worth to make this as restrictive as possible to eliminate as many
+operation evaluations as possible.
+We assume that you have already specified the right shared memory concurrency
+there.
+

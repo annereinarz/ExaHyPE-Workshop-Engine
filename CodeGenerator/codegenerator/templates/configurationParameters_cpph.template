@@ -1,0 +1,177 @@
+{# /**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/ #}
+ 
+{% for namespaceName in codeNamespaceList %}
+namespace {{namespaceName}} {
+{% endfor %}
+
+  // Global configuration 
+  constexpr int getNumberOfVariable()        {return {{nVar}};}
+  constexpr int getNumberOfVariablePadded()  {return {{nVarPad}};}
+  
+  constexpr int getNumberOfParameter()       {return {{nPar}};}
+  constexpr int getNumberOfParameterPadded() {return {{nParPad}};}
+
+  // TODO(JMG): Please implement.
+  constexpr int getNumberOfGlobalObservables()       {return {{0}};}
+  
+  constexpr int getNumberOfData()            {return {{nData}};}
+  constexpr int getNumberOfDataPadded()      {return {{nDataPad}};}
+  
+  constexpr int getBasisSize()               {return {{nDof}};}
+  constexpr int getBasisSizePadded()         {return {{nDofPad}};}
+  
+  constexpr int getDimension()               {return {{nDim}};}
+
+  constexpr bool isLinear()                  {return {{isLinearCText}};}
+  
+{% if useLimiter %}
+  // Limiter configuration
+  constexpr int getBasisSizeLimiter()        {return {{nDofLim}};}
+  constexpr int getBasisSizeLimiterPadded()  {return {{nDofLimPad}};}
+  constexpr int getGhostLayerWidth()         {return {{ghostLayerWidth}};}
+  constexpr int getNumberOfObservable()      {return {{nObs}};}
+{% endif %}
+
+  // Array sizes
+  constexpr int getlQiSize()     {return {{lQiSize}};}
+  constexpr int getlFiSize()     {return {{lFiSize}};} 
+  constexpr int getlSiSize()     {return {{lSiSize}};}
+  constexpr int getgradQSize()   {return {{gradQSize}};}
+  constexpr int getlQhiSize()    {return {{lQhiSize}};}
+  constexpr int getlFhiSize()    {return {{lFhiSize}};}
+  constexpr int getlShiSize()    {return {{lShiSize}};}
+  constexpr int getPSiSize()     {return {{PSiSize}};}
+  constexpr int getlPiSize()     {return {{lPiSize}};}
+  constexpr int getlQiNextSize() {return {{lQiNextSize}};}
+
+  constexpr int getBndFaceSize()      {return {{BndFaceSize}};} // == QR/QL size
+  constexpr int getBndFaceTotalSize() {return {{BndFaceTotalSize}};} // == lQhbnd size
+  constexpr int getBndFluxSize()      {return {{BndFluxSize}};} // == FR/FL size
+  constexpr int getBndFluxTotalSize() {return {{BndFluxTotalSize}};} // == lFhbnd size
+  
+  constexpr int getUpdateSize() {return {{(nDof**nDim)*nVarPad}};} // == lduh size
+
+  //Shifts for fusedSTPVI local memory
+{% set shift = 0 %}
+  constexpr int getlQiShift()   {return {{shift}};}
+{% set shift = shift+lQiSize %}
+{% if lPiSize > 0 %}
+  constexpr int getlPiShift()   {return {{shift}};}
+{% set shift = shift+lPiSize %}
+{% endif %}
+{% if lQiNextSize > 0 %}
+  constexpr int getlQiNextShift()   {return {{shift}};}
+{% set shift = shift+lQiNextSize %}
+{% endif %}
+  constexpr int getlQhiShift()  {return {{shift}};}
+{% set shift = shift+lQhiSize %}
+{% if not isLinear %}
+  constexpr int getrhsShift()   {return {{shift}};} //Same size as lQi
+{% set shift = shift+lQiSize %}
+{% endif %}
+{% if gradQSize > 0 %}
+  constexpr int getgradQShift() {return {{shift}};}
+{% set shift = shift+gradQSize %}
+{% endif %}
+{% if lFiSize > 0 %}
+  constexpr int getlFiShift()   {return {{shift}};}
+{% set shift = shift+lFiSize %}
+{% endif %}
+{% if lFhiSize > 0 %}
+  constexpr int getlFhiShift()  {return {{shift}};}
+{% set shift = shift+lFhiSize %}
+{% endif %}
+{% if lSiSize > 0 %}
+  constexpr int getlSiShift()   {return {{shift}};}
+{% set shift = shift+lSiSize %}
+{% endif %}
+{% if lShiSize > 0 %}
+  constexpr int getlShiShift()  {return {{shift}};}
+{% set shift = shift+lShiSize %}
+{% endif %}
+{% if PSiSize > 0 %}
+  constexpr int getPSiShift()   {return {{shift}};}
+{% set shift = shift+PSiSize %}
+  constexpr int getPSderivativesShift() {return {{shift}};} //same size as PSi
+{% set shift = shift+PSiSize %}
+{% endif %}
+
+  constexpr int getFusedSTPVISize() {return {{shift}};}
+  
+  //Shifts for BoundaryConditions
+{% set shift2 = 0 %}
+  constexpr int getBndFaceShift() {return {{shift2}};}
+{% set shift2 = shift2+BndFaceSize %}
+  constexpr int getBndFluxShift()  {return {{shift2}};}
+{% set shift2 = shift2+BndFluxSize %}
+  
+  constexpr int getBoundaryConditionsSize() {return {{shift2}};}
+  
+  
+//approx Flops (only mat operations)
+  //amr (*leveldelta)
+  constexpr unsigned long faceUnknownsProlongation_flops = {% if nDim == 2 %}{{2*nDof*nDof*(nVarPad+nDataPad)}}{% else %}{{nDof*nDof*(nDof*(nDof*(2*nVarPad+2*nDataPad)+nDofPad))}}{% endif %}; // time leveldelta
+  constexpr unsigned long faceUnknownsRestriction_flops = {% if nDim == 2 %}{{2*nDof*nDof*(nVarPad+nDataPad)}}{% else %}{{nDof*nDof*(nDof*(nDof*(2*nVarPad+2*nDataPad)+nDofPad))}}{% endif %}; // time leveldelta
+  constexpr unsigned long faceFluxRestriction_flops = 0; //TODO JMG //{% if nDim == 2 %}{{2*nDof*nDof*(nVarPad+nDataPad)}}{% else %}{{nDof*nDof*(nDof*(nDof*(2*nVarPad+2*nDataPad)+nDofPad))}}{% endif %}; // time leveldelta
+  constexpr unsigned long volumeUnknownsProlongation_flops = {{nDof*nDof*nDof3D*nDof3D*(2*nDof*nDof*nData+nDof*nDofPad*(nDim-1))}}; // time leveldelta
+  constexpr unsigned long volumeUnknownsRestriction_flops = {{nDof*nDof*nDof3D*nDof3D*(2*nDof*nDof*nData+nDof*nDofPad*(nDim-1))}}; // time leveldelta
+  
+  constexpr unsigned long boundaryConditions_factor = {{nDof*nDof3D}}; //flops of boundaryValue * this factor
+  constexpr unsigned long boundaryConditions_flops = {{nDof*nDof3D*3+nDof3D*3*(nDim-2)}}; //other flops
+  
+  constexpr unsigned long getPointSources_flops = {{4*nDim*nPointSources}};
+  
+  constexpr unsigned long solutionAdjustment_flops = {{(nDof**nDim)*3+nDof**(nDim-1)*3+(nDof**(nDim-2))*3*(nDim-2)}};
+  
+  constexpr unsigned long solutionUpdate_flops = {{(nDof**nDim)*(1+nVar*2)}};
+  
+  constexpr unsigned long stableTimeStepSize_factor = {{(nDof**nDim)*nDim}}; //flops of eigenvalues * this factor
+  constexpr unsigned long stableTimeStepSize_flops = {{(nDof**nDim)*nDim*2+(nDof**nDim)*2}};
+  
+  constexpr unsigned long surfaceIntegral_flops = {{(nDof*nDof3D + (nDof**nDim)*nVarPad*5)*nDim}};
+  constexpr unsigned long faceIntegral_flops = 0; //TODO JMG //{{(nDof*nDof3D + (nDof**nDim)*nVarPad*5)*nDim}};
+  
+{% if isLinear %}
+  constexpr unsigned long fusedSTPVI_flops = {{nDof*nDofPad+nDof*(useFluxFactor*(nDof**(nDim+1)*nVarPad*2*nDim)+useNCPFactor*(nDof**(nDim+1)*nVar*2*nDim+nDof**nDim*nDim*nVar)+nDof**nDim*nVarPad*(nDim+useSourceFactor))+(nDof-1)*nDof**nDim*nVar*2+(nDof-1)*nDof**nDim*nVarPad*(nDim+useSourceFactor)*2+nDof**nDim*(nVarPad+nDataPad)*4*nDim+nDof**nDim*nVarPad*(1+nDim+useSourceFactor)}};
+  constexpr unsigned long fusedSTPVI_ps_flops = {{(nDof+1)*(2+nDof3D*(3+nDof*(3+nDof*3)))+(nDof**(nDim+1))*nVar*3+(nDof**nDim)*nVar+(nDof-2)*((nDof**(nDim+2))*nVarPad*3+(nDof**(nDim+1))*nVarPad*2)+(nDof**(nDim+1))*(1+nVarPad*2)+(nDof**nDim)*nVarPad*nDim}}; //other point source flops
+  constexpr unsigned long fusedSTPVI_ps_nPS_flops = {{(nDof+1)*nDof**nDim*(nDim*(3*nDof-3)+2+nVarPad*2)}}; // * nbPointSource
+  constexpr unsigned long fusedSTPVI_ps_PDE_factor = {{(nDof+1)*nDof**nDim}}; // * nbPointSource * cost of PS PDE
+  constexpr unsigned long fusedSTPVI_PDE_factor = {{nDof**(nDim+1)}}; // flops of used PDE * this factor
+  
+  // RiemannSolver, also 2 eigenvalues cost + this factor * (optionally flux (+MatParam) + optionally NCP (+MatParam))
+  constexpr unsigned long riemannSolver_flops = {{nDof*nDof3D*(nDataPad*4+nVar*6)+nDataPad*2+useNCPFactor*(nDof*nDof3D*(nVar))+useFluxFactor*(nDof*nDof3D*(nVar))}};
+  constexpr unsigned long riemannSolver_factor_NCP  = {{nDof*nDof3D*useNCPFactor}}; // flops of NCP (+opt. matParam) * this factor
+  constexpr unsigned long riemannSolver_factor_Flux = {{nDof*nDof3D*useFluxFactor}}; // flops of Flux (+opt. matParam) * this factor
+{% else %}
+  // fusedSTPVI, multiply by factor and sum
+  constexpr unsigned long fusedSTPVI_picard_flops = {{(nDof**(nDim+1))*(1+nVar)+useFluxFactor*nDim*((nDof**nDim)*(1+nDof*nDofPad+nDof*nDof*nVarPad*2))+useNCPFactor*nDim*((nDof**(nDim+2))*nVar*2)+useSourceOrNCPFactor*((nDof**(nDim+1))*(2+useNCPFactor*nVarPad+2*nVarPad))+(nDof**nDim)*(1+nDof*nDofPad+2*nDof*nDof*nVar+4*nVar*nDof)}}; // time picardIteration
+  constexpr unsigned long fusedSTPVI_PDE_factor = {{nDof**(nDim+1)}}; // flops of used PDE * this factor * picardIteration
+  constexpr unsigned long fusedSTPVI_other_flops = {{1+useNCPFactor*nDof*nDofPad + (nDof**(nDim+1))*(nDataPad*2+useFluxFactor*nDim*nVarPad*2+useSourceOrNCPFactor*nVarPad*2) + nDim*(nDof**nDim)*(nDataPad*4+useFluxFactor*nVarPad*4) + useFluxFactor*((nDof**nDim)*(nDofPad*2+2*nDof*nVarPad*nDim))+useSourceOrNCPFactor*(nDof**nDim)*nVarPad*2}}; // other flops
+  
+  // RiemannSolver, also 2 eigenvalues cost
+  constexpr unsigned long riemannSolver_flops = {{nDof*nDof3D*(nDataPad*4+nVar+nVarPad*3)+useNCPFactor*(nDof*nDof3D*(nVar*3+nVarPad*4))}};
+  constexpr unsigned long riemannSolver_factor = {{nDof*nDof3D*useNCPFactor}}; // flops of NCP * this factor
+{% endif %}
+
+{% if useLimiter %}
+  constexpr unsigned long  projectOnFVLimiterSpace_flops = {{nDofLim*nDofLim3D*nDof*nDofLim*(nDofLim*nDofPad*(nDim-1)+2*nVar*nDofLim*nDof)}};
+  constexpr unsigned long  projectOnDGSpace_flops = {{nDofLim*nDofLim3D*nDof*nDofLim*(nDofLimPad*nDof*(nDim-1)+2*nVar*nDofLim*nDof)}};
+  constexpr unsigned long  discreteMaximumPrincipleAndMinAndMaxSearch_flops = {{4*nObs+nDof*nDof*nDof3D*nDof3D*(nDofPad*nDof*(nDim-1)+nVar*nDof*nDof)+nDof*nDof3D*nDofLim*nDofLim3D*(nDofLim*nDofPad*(nDim-1)+nVar*nDof*nDofLim)}};
+  constexpr unsigned long  findCellLocalMinAndMax_flops = {{nDof*nDof*nDof3D*nDof3D*(nDofPad*nDof*(nDim-1)+nVar*nDof*nDof)+nDof*nDof3D*nDofLim*nDofLim3D*(nDofLim*nDofPad*(nDim-1)+nVar*nDof*nDofLim)}};
+  constexpr unsigned long  findCellLocalLimiterMinAndMax_flops = 0; //only min and max
+{% endif %}
+
+{% for namespaceName in codeNamespaceList %}
+}
+{% endfor %}

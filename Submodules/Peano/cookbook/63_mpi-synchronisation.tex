@@ -1,0 +1,310 @@
+\section{Reduce MPI Synchronisation}
+
+
+\chapterDescription
+  {
+    Around 60 minutes each.
+  }
+  {
+    A working MPI code.
+  }
+
+
+Peano has very strong constraints on the master-worker and worker-master
+communication as the data exchange between these two is synchronous. It imposes
+a partial order. If that slows down your application (you see this from the
+mpianalysis reports), you can kind of weaken the communication constraints. 
+Often, some data is not required immediately, not required globally all the
+time, or doesn't have to be 100\% correct at all algorithmic stages. This
+chapter discusses some things that you can do then.
+So we assume that you have proper load balancing.
+
+
+\begin{smell}
+We face a very strong synchronisation.
+This materialises in very regular execution patterns
+where each rank waits for rank 0 to start up a new traversal.
+It can also be reported by Peano's performance analysis.
+\end{smell}
+
+\begin{center}
+  \includegraphics[width=0.9\textwidth]{63_mpi-synchronisation/mpi-phases-before.pdf}
+\end{center}
+
+\noindent
+It also becomes obvious if you study how often a master has to work for its 
+workers. 
+In the picture below, only rank 0 synchronises the other ranks.
+In this case, you have to weaken the global synchronisation.
+If multiple of these edges pop up, it is time to weaken all the worker-master
+synchronisations---unless you can identify that you have a load balancing issue.
+
+
+\begin{center}
+  \includegraphics[width=0.5\textwidth]{63_mpi-synchronisation/master-worker-before.pdf}
+\end{center}
+
+
+
+\subsection{Postpone and tailor master-worker and worker-master data exchange}
+
+In this section, we study the communication specification of the mappings. 
+By default, they are set to the most general case:
+Peano send away data from a local node if and only if it has traversed the whole local tree. 
+In return, it requires all input data before it starts to traverse anything.
+
+If you manage to send out data earlier, a rank's master can continue its local
+traversal earlier.
+If you manage to receive important data from the master, i.e.~from coarser
+mesh levels, later, your rank can start its traversal right away when it is
+informed which adapter is ran next.
+This allows you to overlap computations more aggressively. 
+
+
+\paragraph{Multiscale vertices and cells}
+
+If a cell in the spacetree is deployed to another rank (grey cell in the sketch
+below), the master continues to hold a replica of the deployed cell.
+At the begin of a traversal, it sends the replica together with its parent cell
+to the worker (blue instance) that is responsible for the actual data.
+When the worker has finished its traversal, it sends the blue cell plus its
+parent back to the master.
+The same holds for the vertices adjacent to the cells.
+
+\begin{center}
+  \includegraphics[width=0.35\textwidth]{63_mpi-synchronisation/master-worker.pdf}
+\end{center}
+
+\noindent
+Such a workflow allows you to realise multiscale algorithms where information is
+transferred through the cells or vertices from the master ot the worker and
+back.
+In return, the data exchange is rather critical as it runs synchronous.
+The master is not allowed to fire up the worker to do its traversal before it
+hasn't loaded all the vertices.
+A similar reasoning holds the other way round.
+Please note that the solver's state is exchanged along the very same lines,
+i.e.~when we start up a worker and when the worker traversal terminates.
+
+
+We notion that many codes do not require such a tight multiscale vertex
+synchronisation.
+If no multiscale data is exchanged at all, we do not need any of these
+synchronous data sends and receives.
+If we transfer data only through cells, we do not need the vertex copies before
+we start the fine grid traversal.
+We can wait until we do the very first \texttt{enterCell} on the worker.
+Only if we need the copies of the vertices before the first
+\texttt{touchVertexFirstTime}, we have to synchronise tightly.
+
+
+\begin{remark}
+In Peano, a cell that is deployed to a worker has exclusively refined adjacent
+vertices. 
+You can assume that a deployed cell (the greyish in the sketch) thus always is
+refined.
+\end{remark}
+
+
+If you want tailor the data exchange, you have to open all the mappings you use
+in your adapter.
+There are two enumeration values that allow you specify exactly which data you
+need at which time throughout a worker traversal.
+
+
+\begin{remark}
+Some codes may not skip multiscale data transfer all the time. See discussion in
+the sections below on details.
+\end{remark}
+
+
+\paragraph{A ``popular'' pattern}
+
+If a master-worker exchange is switched on and you make
+\texttt{prepareSendToWorker} return \texttt{false}, then information is
+sent to the worker but no result is sent back.
+This is often done in the first iteration of a batch.
+Many codes then switch off the master-worker for the remainder of the batch.
+
+Yet, they do activate the worker-master communication at the end of the batch. 
+If master-worker data is switched off, the worker however still continues with
+the old state object which holds the information that the master's last 
+\texttt{prepareSendToWorker} had returned \texttt{false} and skips data sends.
+So you need master-worker switched on, too.
+
+
+
+\subsection{Weaken synchronisation with global master}
+
+\begin{center}
+  \includegraphics[width=0.9\textwidth]{63_mpi-synchronisation/mpi-phases-after.pdf}
+\end{center}
+
+
+\begin{smell}
+The performance analysis reports on strong synchronisation and the traces show
+that each new iteration on each rank coincides exactly with the start of a
+global new step (vertical bars in plot).
+\end{smell}
+
+
+The global master (rank 0) is kind of a pulse generator for the whole code. 
+Whenever the \texttt{runAsMaster} operation triggers \texttt{iterate}, it tells
+each rank that handles a partition which adapter to use and to start its
+traversal or wait for its master to trigger the traversal, respectively.
+This is a very strong synchronisation.
+Notably, no rank can continue to work with the next iteration unless rank 0 runs
+into the next \texttt{iterate} as well.
+There are basically two ways to improve this situation:
+
+\begin{enumerate}
+  \item Perform more than one time step with the same adapter and settings in a
+  row. For this, use the integer argument of \texttt{iterate()}. Note that
+  running multiple time steps switches off load balancing for this phase of the program.
+  Obviously, this version works if and only if you run the same adapter several 
+  times.
+  \item You may alternatively find out that you don't need the rank 0 (that
+  doesn't hold any data anyway) to wait for all the other ranks in each
+  iteration. Often, you run for example a sequence of adapters and you require
+  global data (such as global residual) only after the last run. 
+  This second option (which is typically not a quick 'n dirty one) is discussed
+  in the next subsection. 
+\end{enumerate}
+
+\begin{remark}
+ If you use the first argument of \texttt{iterate} to run $n\geq 2$ grid
+ traversals through one  \texttt{iterate} call, then the load balancing
+ automatically is switched off for the first $n-1$ traversals invoked. If
+ it has been active before your call, it is reactivated in the $n$th iteration.
+\end{remark}
+
+
+\subsection{Skip worker-master data transfer locally/sporadically}
+\label{section:63_mpi-synchronisation:skip-worker-master}
+
+We next discuss the decond variant.
+We assume that your code already runs a fixed number of iterations per
+\texttt{iterate} call though this is not absolutely necessary.
+
+\begin{remark}
+The discussion of this feature is didactically out-of-place. We typically
+observe that strong synchronisation is not an issue after a code was changed to
+run multiple iterations in one sweep. Usually, the next smell are late boundary
+senders as discussed in Section
+\ref{section:64_advanced-mpi:switch-off-vertex-data-exchange}. Once these are
+eliminated, the present smell often arises.
+\end{remark}
+
+
+\begin{smell}
+You run multiple iterations with one \texttt{iterate} command but nevertheless
+the performance analysis identifies strong synchronisation and/or
+the MPI trace shows that the traversals are in sync.
+\end{smell}
+
+\begin{center}
+  \includegraphics[width=0.7\textwidth]{63_mpi-synchronisation/no-skip-of-reduction.png}
+\end{center}
+
+\noindent
+We see in the example above that the execution phases are in sync while the
+report finds no later worker-master relation. 
+Furthermore, we see an oscillating pattern: every second iteration lasts
+significantly longer which materialises in zig zag timings for individual steps,
+too.
+
+Our goal in this step is to break up this synchronisation further which,
+depending on your smell
+\begin{itemize}
+  \item eliminates late workers or
+  \item allows more ranks to aggressively finish their boundary data exchange
+  and thus free the interconnects from traffic.
+\end{itemize}
+
+
+\noindent
+There are two ways to skip reductions:
+\begin{itemize}
+  \item If you set the flag \texttt{MaskOutWorkerMasterDataAndStateExchange}
+  in the communication specifications of all involved mappings, Peano will never
+  reduce any data.
+  \item If you make \texttt{prepareSendToWorker(...)} of all involved mappings
+  return \texttt{false}, then Peano will skip the reduction irrelevant of the
+  settings in the communication specification.
+\end{itemize}
+
+
+\noindent
+The first variant is trivial. For the latter (which allows you to switch the
+reduction on/off depending on your needs) multiple steps have to be realised:
+
+
+\begin{enumerate}
+  \item Identify all mappings of the adapters where you might be able from time
+  to time to skip reductions.
+  \item Ensure that these adapters are invoked through \texttt{iterate} for more
+  than one iteration.
+  \item Ensure that all mappings' \texttt{prepareSendToWorker(...)} return
+  \texttt{false} for each iteration where Peano may skip the reduction.
+\end{enumerate}
+
+  
+\begin{remark}
+  If you want to validate that reductions have been skipped, switch on the log
+  info of 
+  \texttt{peano::grid::nodes::Node::updateCellsParallel}
+  \texttt{StateBeforeStoreForRootOfDeployedSubtree}.
+\end{remark}
+
+\noindent
+It is a popular strategy to skip reductions if and only if the load balancing is
+switched off.
+Furthermore, we keep in mind that any load balancing is automatically
+switched off if we run multiple traversals through one \texttt{iterate} command
+and only reactivated in the very last traversal of a set of traversals.
+This also makes sense from the application point of view:
+If you want to load balance, master and worker ranks have to communicate with
+each other and may not skip any data/status exchange.
+So may codes use a strategy as follows:
+
+\begin{code}
+bool myproject::mappings::MyMapping::prepareSendToWorker(...) {
+  if (
+    !peano::parallel::loadbalancing::Oracle::getInstance().isLoadBalancingActivated()
+  ) {
+    return false;
+  }
+  else return true;
+}
+\end{code}
+
+
+\begin{remark}
+Peano disables reduction skips on two ranks A and B if load balancing triggers a
+fork or join between them. 
+\end{remark}
+
+
+After we have eliminated all late workers and also 
+extensive boundary data exchange (Section
+\ref{section:64_advanced-mpi:switch-off-vertex-data-exchange}), it sometimes is
+tricky to validate whether and when the reduction skip kicks in.
+However, we typically see lots of ranks spending a significand amount of their
+time before they actually enter their domain (bright red phases in the
+performance analysis) if the switches do not work properly. 
+If your code fails to run multiple iterations in one batch where the reduction
+is switched off, the global master furthermore seems to synchronise its work
+with the work of the other ranks even if you switched off boundary exchange.
+The picture below illustrates this behaviour at hands of the MPI performance
+analysis.
+
+\begin{center}
+  \includegraphics[width=0.5\textwidth]{63_mpi-synchronisation/mpi-phases-late-master.png}
+\end{center}
+
+With a successful reduction skip in place, the output should resemble something
+alike 
+
+\begin{center}
+  \includegraphics[width=0.5\textwidth]{63_mpi-synchronisation/mpi-phases-batched-skip.pdf}
+\end{center}

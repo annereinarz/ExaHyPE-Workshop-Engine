@@ -1,0 +1,139 @@
+#include "{{solver}}.h"
+
+#include "{{solver}}_Variables.h"
+
+
+tarch::logging::Log {{project}}::{{solver}}::_log( "{{project}}::{{solver}}" );
+
+void {{project}}::{{solver}}::init(const std::vector<std::string>& cmdlineargs,const exahype::parser::ParserView& constants) {
+  // Tip: You find documentation for this method in header file "{{project}}::{{solver}}.h".
+  
+  // @todo Please implement/augment if required
+}
+
+void {{project}}::{{solver}}::adjustSolution(const double* const x,const double t,const double dt, double* const Q) {
+  // Tip: You find documentation for this method in header file "{{project}}::{{solver}}.h".
+  // Tip: See header file "{{project}}::{{abstractSolver}}.h" for toolkit generated compile-time 
+  //      constants such as PatchSize, NumberOfVariables, and NumberOfParameters.
+  
+  // @todo Please implement/augment if required
+  {% for i in range_0_nVarParam %}
+  Q[{{i}}] = 0.0;
+  {% endfor %}
+}
+
+void {{project}}::{{solver}}::eigenvalues(const double* const Q, const int dIndex, double* const lambda) {
+  // Tip: You find documentation for this method in header file "{{project}}::{{solver}}.h".
+  // Tip: See header file "{{project}}::{{abstractSolver}}.h" for toolkit generated compile-time 
+  //      constants such as PatchSize, NumberOfVariables, and NumberOfParameters.
+  
+  // @todo Please implement/augment if required
+  {% for i in range_0_nVar %}
+  lambda[{{i}}] = 1.0;
+  {% endfor %}
+}
+
+void {{project}}::{{solver}}::boundaryValues(
+    const double* const x,
+    const double t,const double dt,
+    const int faceIndex,
+    const int direction,
+    const double* const stateInside,
+    double* const stateOutside) {
+  // Tip: You find documentation for this method in header file "{{project}}::{{solver}}.h".
+  // Tip: See header file "{{project}}::{{abstractSolver}}.h" for toolkit generated compile-time 
+  //      constants such as PatchSize, NumberOfVariables, and NumberOfParameters.
+
+  // @todo Please implement/augment if required
+  {% for i in range_0_nVar %}
+  stateOutside[{{i}}] = stateInside[{{i}}];
+  {% endfor %}
+}
+
+//***********************************************************
+//*********************** PDE *******************************
+//***********************************************************
+
+//to add new PDEs specify them in the specification file, delete this file and its header and rerun the toolkit
+
+
+{% if useFlux and not useViscousFlux %}
+void {{project}}::{{solver}}::flux(const double* const Q,double** const F) {
+  // Tip: You find documentation for this method in header file "{{project}}::{{solver}}.h".
+  // Tip: See header file "{{project}}::{{abstractSolver}}.h" for toolkit generated compile-time 
+  //      constants such as PatchSize, NumberOfVariables, and NumberOfParameters.
+  
+  // @todo Please implement/augment if required
+  {% for d in range_0_nDim %}
+  {% for i in range_0_nVar %}
+  F[{{d}}][{{i}}] = 0.0;
+  {% endfor %}
+  
+  {% endfor %}
+}
+{% endif %}
+
+
+{% if useViscousFlux %}
+void {{project}}::{{solver}}::viscousFlux(const double* const Q,const double* const gradQ, double** const F) {
+  // Tip: You find documentation for this method in header file "{{project}}::{{solver}}.h".
+  // Tip: See header file "{{project}}::{{abstractSolver}}.h" for toolkit generated compile-time 
+  //      constants such as PatchSize, NumberOfVariables, and NumberOfParameters.
+
+  // @todo Please implement/augment if required
+  {% for d in range_0_nDim %}
+  {% for i in range_0_nVar %}
+  F[{{d}}][{{i}}] = 0.0;
+  {% endfor %}
+
+  {% endfor %}
+}
+
+void {{project}}::{{solver}}::viscousEigenvalues(const double* const Q, const int dIndex, double* const lambda) {
+  // Tip: You find documentation for this method in header file "{{project}}::{{solver}}.h".
+  // Tip: See header file "{{project}}::{{abstractSolver}}.h" for toolkit generated compile-time 
+  //      constants such as PatchSize, NumberOfVariables, and NumberOfParameters.
+
+  // @todo Please implement/augment if required
+  {% for i in range_0_nVar %}
+  lambda[{{i}}] = 1.0;
+  {% endfor %}
+}
+{% endif %}
+
+
+{% if useSource %}
+//You can either implement this method or modify fusedSource
+void {{project}}::{{solver}}::algebraicSource(const tarch::la::Vector<DIMENSIONS, double>& x, double t, const double *const Q, double *S) {
+  // Tip: You find documentation for this method in header file "{{project}}::{{solver}}.h".
+  // Tip: See header file "{{project}}::{{abstractSolver}}.h" for toolkit generated compile-time 
+  //      constants such as PatchSize, NumberOfVariables, and NumberOfParameters.
+  // @todo Please implement/augment if required
+  {% for i in range_0_nVar %}
+  S[{{i}}] = 0.0;
+  {% endfor %}
+}
+{% endif %}
+
+{% if useNCP %}
+void  {{project}}::{{solver}}::nonConservativeProduct(const double* const Q,const double* const gradQ,double* const BgradQ) {
+  // Tip: You find documentation for this method in header file "{{project}}::{{solver}}.h".
+  // Tip: See header file "{{project}}::{{abstractSolver}}.h" for toolkit generated compile-time 
+  //      constants such as PatchSize, NumberOfVariables, and NumberOfParameters.
+  
+  // @todo Please implement/augment if required
+  {% for i in range_0_nVar %}
+  BgradQ[{{i}}] = 0.0;
+  {% endfor %}
+}
+{% endif %}
+
+{% if usePointSources %}
+void  {{project}}::{{solver}}::pointSource(const double* const x,const double t,const double dt, double* const forceVector, double* const x0) {
+  // Tip: You find documentation for this method in header file "{{project}}::{{solver}}.h".
+  // Tip: See header file "{{project}}::{{abstractSolver}}.h" for toolkit generated compile-time 
+  //      constants such as PatchSize, NumberOfVariables, and NumberOfParameters.
+  
+  // @todo Please implement/augment if required
+}
+{% endif %}

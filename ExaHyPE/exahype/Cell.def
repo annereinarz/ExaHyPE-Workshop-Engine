@@ -1,0 +1,12 @@
+Packed-Type: int;
+
+class exahype::dastgen::Cell {
+  /**
+   * We specify a ADERDGCellDescription for each Solver that should run on the grid.
+   */
+  persistent int CellDescriptionsIndex;
+ 
+  // Per patch type, we need a pointer to the cell descriptions of the cell
+  persistent pointer ADERDGCellDescriptions;
+  persistent pointer FiniteVolumesCellDescriptions;
+};

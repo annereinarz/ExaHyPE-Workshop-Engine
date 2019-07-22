@@ -1,0 +1,190 @@
+\section{Unit tests}
+\label{section:test}
+
+
+
+\chapterDescription
+  {
+    There are no real examples coming along with this chapter, but you should be
+    able to write your own tests with 20 minutes.
+  }
+  {
+    Chapter \ref{chapter:quickstart}.
+  }
+
+Peano introduces its own lightweight test concept with picks up best practices
+from the JUnit world. 
+While it is way simpler and has no external dependencies (all test routines are
+collected within the \texttt{tarch} subdirectory), it provides a few macros to
+handle numeric data---which might be convenient for AMR applications.
+
+\subsection{Test architecture}
+
+A Peano test is a class that implements and extends
+\texttt{tarch::tests::TestCase}.
+By convention, I place my tests always into subdirectories/subnamespaces of the
+respective component, but this is not a must.
+A test class must implement a \texttt{void run()} method.
+This is the only convention. 
+The Peano toolkit by default generates one (empty) test per project that can act
+as a blueprint if you don't want to write your test manually. 
+Feel free to delete the class if you don't want to write unit tests on your own
+(though the test itself is empty and thus does not harm the test runs).
+
+A proper test class should realise a couple of \texttt{void} operations without
+arguments that run the individual tests.
+A minimalistic test thus looks as follows:
+
+\begin{code}
+namespace myproject {
+  namespace tests {
+    class TestCase;
+  }
+}
+
+class myproject::tests::TestCase : public tarch::tests::TestCase {
+ private:
+  /**
+   * These operations implement the real tests.
+   */
+  void test1();
+  void test2();
+ public:
+  TestCase();
+  virtual ~TestCase();
+
+  virtual void run();
+};
+\end{code}
+
+The test implementation has to follow two conventions:
+\begin{enumerate}
+  \item The test has to register itself as test in the global
+  \texttt{TestCaseFactory}. It provides a macro \texttt{registerTest} to do so:
+    \begin{code}
+#include "tarch/tests/TestCaseFactory.h"
+registerTest(myproject::tests::TestCase)
+    \end{code}
+  \item The test's \texttt{run} operation has to register the individual void
+  routines running the actual tests:
+  \begin{code}
+void exahype::tests::TestCase::run() {
+  testMethod(test1);
+  testMethod(test2);
+}
+  \end{code}
+\end{enumerate}
+
+\noindent
+Again, the pregenerated empty test shows how to use the unit test framework
+correctly.
+Once these steps are handled, you can run the tests within your \texttt{main}:
+
+\begin{code}
+tarch::tests::TestCaseRegistry::getInstance().getTestCaseCollection().run();
+int numberOfFailedTests = tarch::tests::TestCaseRegistry::getInstance()
+                         .getTestCaseCollection()
+                         .getNumberOfErrors();
+\end{code}
+
+\noindent
+The call invokes all the unit tests that have registered---this is Peano's core
+unit tests, your own test cases, and all other test cases someone else
+(toolboxes you use, e.g.) has registered for your project.
+It returns an output similar to
+\begin{code}
+running test case collection "exahype.tests.c" ...... ok                                                                                                                
+running test case collection "exahype.tests.solvers" .. ok                                                                                                              
+running test case collection "exahype.tests" .... ok                                                                                                                    
+running test case collection "peano.grid.tests" .................... ok                                                                                                 
+running test case collection "peano.grid"  ok                                                                                                                           
+running test case collection "peano.heap.tests" .. ok                                                                                                                   
+running test case collection "peano.heap"  ok                                                                                                                           
+running test case collection "peano"  ok                                                                                                                                
+running test case collection "tarch"  ok                                                                                                                                
+running global test case collection  ok                                                                                                                                 
+\end{code}
+
+\noindent
+The output returns a hierarchical overview over all tests ran. 
+The number of dots per package identifies the number of actual test functions in
+a namespace.
+If tests fail, the interface reports the exact location including file name and
+line number.
+
+
+\begin{remark}
+  It is convenient to run tests only if \texttt{-DAsserts} (and probably
+  \texttt{-DDebug}) is set, i.e.~to remove the test runs from your release
+  build.
+  Notably the Peano kernel does not register some tests if \texttt{-DDebug} is
+  not uses for the compile as the tests rely on helper attributes that are only
+  available in the debug mode.
+\end{remark}
+
+
+
+\begin{remark}
+  Peano provides two types of test registries: the standard test registry as
+  used in this section is meant for standard unit tests. There is a second
+  registry for integration tests. Integration tests are unit tests that register
+  via the macro \texttt{registerIntegrationTest}. They have to be invoked
+  explicitly in the \texttt{main} via the \texttt{IntegrationTestCaseRegistry}. 
+  The idea is that there might be (unit) tests that last very long or require a
+  certain environment, so you don't want to run them all the time, while other
+  tests are ran on a regular basis. If you distinguish between unit tests (that
+  you run frequently) and integration tests, you can host both of them within
+  the same source code concept.
+\end{remark}
+
+
+
+
+\begin{remark}
+  Tests tend to become spaghetti code and some of them are very expensive to
+  translate as the compiler's optimiser has a hard time to translate the long
+  code fragments.
+  I thus recommend to insert
+  \begin{code}
+#include "tarch/compiler/CompilerSpecificSettings.h"
+
+#ifdef UseTestSpecificCompilerSettings
+#pragma optimize("", off)
+#endif
+
+// All the implementation
+
+#ifdef UseTestSpecificCompilerSettings
+#pragma optimize("", on)
+#endif
+  \end{code}
+  into your implementation file around all your code. This switches off all
+  optimisation explicitly for the tests.
+\end{remark}
+
+
+\subsection{Test routines}
+
+A typical unit tests builds up some classes, befills them with data, invokes
+some operations and finally checks the class state via some getters or routines
+returning results.
+Peano's way to do the actual tests are \texttt{validate} macros.
+You find all these macros in the file \texttt{tarch/tests/TestMacros.h}.
+There are three classes of macros:
+
+\begin{itemize}
+  \item Standard validation macros similar to assertions that test a boolean
+  condition.
+  \item Comparison macros that compare two values through the
+  \texttt{operator==} (which might be overloaded).
+  \item Comparison macros that compare doubles, vectors or matrices numerically,
+  i.e.~up to a prescribed precision.
+\end{itemize}
+
+\noindent
+All of these macros come along with variants that allow you to plot additional
+information if a test has failed, i.e.~to plot the values of further variables,
+e.g.
+All validation macros automatically set a test to failed if they fail, and they
+write a verbose message on the reason why some tests failed to the terminal.  
+

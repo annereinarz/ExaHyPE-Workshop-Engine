@@ -1,0 +1,9 @@
+Create snapshot:
+================
+
+FILES="Demonstrators/TrivialProject/TrivialProject.exahype"
+tar -czvf Demonstrator-TrivialProject.tar.gz  $FILES
+
+mv Demonstrator-TrivialProject.tar.gz ~/git/ExaHyPE-Release/Demonstrators
+cp $FILES ~/git/ExaHyPE-Release/Demonstrators/TrivialProject
+

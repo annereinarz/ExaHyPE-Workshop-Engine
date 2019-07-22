@@ -1,0 +1,1015 @@
+{
+  "$comment" : "This is the JSON-Schema for an ExaHyPE specification file 2.0",
+  "$id" : "http://dev.exahype.eu/exahype-specfile.schema.json",
+  "type" : "object",
+  "$schema" : "http://json-schema.org/draft-04/hyper-schema",
+  "definitions" : {
+    "variables" : {
+      "oneOf" : [
+        {
+          "type" : "integer",
+          "minimum" : 1,
+          "exclusiveMinimum" : false
+        },
+        {
+          "type" : "array",
+          "$comment" : "Named variables with lengths (like vectors)",
+          "items" : {
+            "type" : "object",
+            "required" : [ "name" ],
+    	    "additionalProperties" : false,
+            "properties" : {
+              "name" : {
+                "type" : "string", 
+                "title" : "Name of variable",
+                "pattern" : "^[a-zA-Z_][a-zA-Z0-9_]*$"
+              }, 
+              "multiplicity" : {
+                "type" : "integer", 
+                "title" : "Multiplicity of variables", 
+                "default" : 1
+              }
+            }
+          }
+        },
+        {
+          "type" : "array",
+          "$comment" : "Named scalar variables",
+          "items" : {
+            "type" : "string",
+            "title" : "Name of variable",
+            "pattern" : "^[a-zA-Z_][a-zA-Z0-9_]*$"
+          }
+        }
+      ]
+    }
+  }, 
+  "required" : [
+    "project_name",
+    "paths",
+    "computational_domain",
+    "solvers"
+  ],
+  "additionalProperties" : false,
+  "properties" : {
+    "project_name" : {
+      "type" : "string",
+      "title" : "The name of the application or PDE, will get a C++ namespace",
+      "pattern" : "^[a-zA-Z_][a-zA-Z0-9_]*$",
+      "scope" : "compile-time",
+      "used-by" : "toolkit",
+      "old_format" : {"token_after" : "exahype-project"},
+      "examples" : [
+        "EulerFlow"
+      ]
+    },
+    "paths" : {
+      "type" : "object", 
+      "scope" : "compile-time",
+      "used-by" : "toolkit",
+      "required" : [ "output_directory", "peano_kernel_path", "exahype_path" ],
+      "additionalProperties" : false,
+      "properties" : {
+        "output_directory" : {
+          "type" : "string", 
+          "title" : "The directory name where to put the generated code into (relevant only for compile time)",
+          "old_format" : { "token_after" : "output-directory" },
+          "examples" : [
+            "GMRHD_cpp",
+            "foo/bar/baz/"
+          ]
+        }, 
+        "plotter_subdirectory" : {
+          "type" : "string", 
+          "title" : "In case you end up with a large number of plotters",
+          "pattern" : "(^$|[^/].*$)",
+          "examples" : [
+            "plotters",
+            "Writers",
+            ""
+          ],
+          "default" : ""
+        }, 
+        "peano_kernel_path" : {
+          "type" : "string", 
+          "title" : "The directory where the Peano directory is installed in (relevant only for compile time)", 
+          "default" : "./Peano", 
+          "old_format" : { "token_after" : "peano-kernel-path" },
+          "examples" : [
+            "./Peano"
+          ]
+        }, 
+        "log_file" : {
+          "type" : "string", 
+          "title" : "The path or name of the ExaHyPE runtime logfile", 
+          "default" : "", 
+          "old_format" : { "token_after" : "log-file" },
+          "examples" : [
+            "whatever.log",
+            "/path/to/somewhere.log"
+          ]
+        }, 
+        "exahype_path" : {
+          "type" : "string", 
+          "title" : "The path to the ExaHyPE code", 
+          "default" : "./ExaHyPE",
+          "old_format" : { "token_after" : "exahype-path" },          
+          "examples" : [
+            "./ExaHyPE",
+            "/your/installation/to/ExaHyPE/"
+          ]
+        }
+      }
+    },
+    "profiling" : {
+      "type" : "object",
+      "properties" : {
+        "profiler" : {
+          "type" : "string",
+          "default" : "NoOpProfiler"
+        },
+        "metrics" : {
+          "type" : "array",
+          "$comment" : "A list of metrics",
+          "items" : {
+            "type" : "string"
+          }
+        },
+        "profiling_output" : { "type" : "string" },
+        "likwid_inc" : { "type" : "string" },
+        "likwid_lib" : { "type" : "string" },
+        "ipcm_inc" : { "type" : "string" },
+        "ipcm_lib" : { "type" : "string" },
+        "profiling_target" : {
+          "type" : "string", 
+          "title" : "The algorithmic phase we want to profile.", 
+          "scope" : "run-time",
+          "default": "whole_code",
+          "enum" : [ "whole_code", "neighbour_merge", "predictor", "update" ]
+        },
+        "measure_cell_processing_times" : {
+          "type" : "boolean", 
+          "title" : "Measure the times the solvers require to perform updates and predictor computations", 
+          "scope" : "run-time"
+        },
+        "measure_cell_processing_times_iter" : {
+          "type" : "integer", 
+          "title" : "Number of measurements to perform when measuring cell processing times. The results are averaged over the number of measurements", 
+          "scope" : "run-time",
+          "minimum" : 1,
+          "exclusiveMinimum" : false
+        }
+      },
+      "dependencies" : {
+        "measure_cell_processing_times_iter" : ["measure_cell_processing_times"]
+      }
+    },
+    "architecture" : {
+      "type" : "string", 
+      "title" : "Computational target architecture", 
+      "default" : "noarch", 
+      "scope" : "compile-time",
+      "used-by" : "toolkit",
+      "old_format" : { "token_after" : "architecture" },
+      "enum" : [
+        "noarch",
+        "wsm",
+        "snb",
+        "hsw",
+        "knl",
+        "skx"
+      ]
+    }, 
+    "_compiler_flags" : {},
+    "compiler_flags" : {
+      "type" : "string",
+      "title" : "Additional compiler flags",
+      "default" : "",
+      "scope" : "compile-time",
+      "used-by" : "toolkit"
+    },
+    "_linker_flags" : {},
+    "linker_flags" : {
+      "type" : "string",
+      "title" : "Additional linker flags",
+      "default" : "",
+      "scope" : "compile-time",
+      "used-by" : "toolkit"
+    },
+    "computational_domain" : {
+      "type" : "object",
+      "oneOf" : [
+        { "required" : [ "dimension", "width", "offset", "end_time"] },
+        { "required" : [ "dimension", "width", "offset", "time_steps"] }
+      ],
+      "additionalProperties" : false,
+      "old_format_prepend" : { "within_section" : "computational-domain" },
+      "properties" : {
+        "dimension" : {
+          "type" : "integer", 
+          "title" : "Spatial dimensions of the code and problem", 
+          "scope" : "compile-time",
+          "old_format" : { "token_after" : "dimension"  },
+          "enum" : [ 2, 3 ]
+        }, 
+        "width" : {
+          "type" : "array",
+          "items" : {
+            "type" : "number", 
+            "title" : "The extends of the computational domain in each spatial direction",
+            "scope" : "run-time",
+            "minimum" : 0,
+            "exclusiveMinimum" : true
+          },
+          "$comment" : "We wait for a solution to: https://stackoverflow.com/questions/27597825/assigning-maxitems-property-in-an-array-in-json-schema-equal-to-some-other-prope",
+          "minItems" : 2,
+          "maxItems" : 3,
+          "old_format" : { "all_numeric_tokens_after" : "width" }
+        }, 
+        "offset" : {
+          "type" : "array",
+          "default" : [0.0, 0.0, 0.0],
+          "items" : {
+            "type" : "number", 
+            "title" : "The offset of the origin for the computational domain",
+            "scope" : "run-time"
+          },
+          "$comment" : "We wait for a solution to: https://stackoverflow.com/questions/27597825/assigning-maxitems-property-in-an-array-in-json-schema-equal-to-some-other-prope",
+          "minItems" : 2,
+          "maxItems" : 3,
+          "old_format" : { "all_numeric_tokens_after" : "offset" }
+        },
+        "time_steps" : {
+          "type" : "integer", 
+          "title" : "The number of steps the simulation is run",
+          "scope" : "run-time",
+          "minimum" : 0,
+          "exclusiveMinimum" : false,
+          "old_format" : { "token_after" : "time-steps" }
+        },
+        "end_time" : {
+          "type" : "number", 
+          "title" : "The end time of the simulation",
+          "scope" : "run-time",
+          "minimum" : 0,
+          "exclusiveMinimum" : false,
+          "old_format" : { "token_after" : "end-time" }
+        }, 
+        "max_mesh_setup_iterations" : {
+          "type" : "integer", 
+          "title" : "set a limit on the maximum number of grid setup iterations. This is mainly a debugging option as the grid might be instable when the mesh setup is stopped.", 
+          "minimum" : 1,
+          "exclusiveMinimum" : false,
+          "default": 400
+        },
+        "outside_cells" : {
+          "type" : "integer", 
+          "title" : "Place a certain number of bounding box cells outside of the domain (all coordinate directions). If the number is odd, one less cells is placed outside on the 'left' side than on the 'right side'", 
+          "default" : 2,
+          "minimum" : 0,
+          "exclusiveMinimum" : false
+        },
+        "outside_cells_left" : {
+          "type" : "integer", 
+          "title" : "Number of outside cells to be placed on the 'left' side.", 
+          "default" : 1,
+          "minimum" : 0,
+          "exclusiveMinimum" : false
+        },
+        "one_third_of_cells_outside" : {
+          "type" : "boolean", 
+          "title" : "Places one third of the bounding box cells per coordinate direction (plus 2 cells) outside of the domain. This way we can put 2^d ranks on the coarsest grid (cubic domains). This flag overrules the outside_cells and outside_cells_left parameters.", 
+          "default" : false
+        }
+      }
+    }, 
+    "_shared_memory" : {},
+    "shared_memory" : {
+      "type" : "object", 
+      "used-by" : "toolkit",
+      "scope" : "run-time",
+      "required" : [ "cores" ],
+      "additionalProperties" : false,
+      "old_format_prepend" : { "within_section" : "shared-memory" },
+      "properties" : {
+        "cores" : {
+          "type" : "integer", 
+          "title" : "Number of shared-memory cores per node", 
+          "minimum" : 1,
+          "exclusiveMinimum" : false,
+          "old_format" : { "token_after" : "cores" }
+        },
+        "background_job_processing" : {
+          "type" : "string", 
+          "title" : "How to process priority background jobs",
+          "enum" : [ "job_system", "job_system_without_priorities", "spawn_tasks" ],
+          "default" : "job_system"
+        },
+        "job_system_wait_behaviour" : {
+          "type" : "string", 
+          "title" : "What to do when a job of a given priority has not completed yet.",
+          "enum" : [ "process_any_jobs", "process_jobs_with_same_priority", "only_poll_mpi" ],
+          "default" : "process_any_jobs"
+        },
+        "background_job_consumers" : {
+          "type" : "integer", 
+          "title" : "Number of background job consumer threads to run during a mesh traversal", 
+          "minimum" : -2,
+          "exclusiveMinimum" : false,
+          "default" : 1,
+          "old_format" : { "token_after" : "background-tasks" }
+        },
+        "min_background_jobs_in_one_rush" : {
+          "type" : "integer", 
+          "title" : "Minimum number of background jobs a consumer grabs from the queue in a single rush (default: 1).", 
+          "minimum" : 1,
+          "exclusiveMinimum" : false,
+          "default" : 1
+        },
+        "max_background_jobs_in_one_rush" : {
+          "type" : "integer", 
+          "title" : "Maximum number of background jobs a consumer grabs from the queue in a single rush (default: maximum (signed) integer number)", 
+          "minimum" : 1,
+          "exclusiveMinimum" : false,
+          "default" : 2147483647
+        },
+        "autotuning_strategy" : {
+          "type" : "string", 
+          "title" : "Autotuning algorithm to use", 
+          "enum" : ["dummy","autotuning","autotuning_without_learning","autotuning_without_restart","sampling"],
+          "default" : "dummy",
+          "old_format" : { "token_after" : "identifier" }
+        },
+        "invasion_strategy" : {
+          "type" : "string", 
+          "title" : "TBB invade strategy", 
+          "enum" : ["no_invade", "analyse_optimal_static_distribution_but_do_not_invade", "occupy_all_cores", "invade_between_time_steps", "invade_throughout_computation", "invade_at_time_step_startup_plus_throughout_computation"],
+          "default" : "no_invade",
+          "old_format" : { "token_after" : "configure" }
+        },
+        "properties_file" : {
+          "type" : "string", 
+          "title" : "Path to a properties file", 
+          "default" : "sharedmemory.properties"
+        },
+        "manual_pinning" : {
+          "type" : "boolean",
+          "title" : "Tell ExaHyPE to pin each thread to specific CPU core.",
+          "default" : false,
+          "old_format" : { "set_if_token_exists" : "manual-pinning" }
+        },
+        "thread_stack_size" : {
+          "type": "integer",
+          "title" : "Specify the stack size of each thread (in bytes) [default: 0]. If you specify 0, the default is chosen. (Changing the stack size with ulimit does not apply to TBB worker threads. This makes this parameter necessary.)",
+          "minimum" : 0,
+          "exclusiveMinimum" : false
+        }
+      }
+    }, 
+    "_distributed_memory" : {},
+    "distributed_memory" : {
+      "type" : "object", 
+      "used-by" : "toolkit",
+      "scope" : "run-time",
+      "additionalProperties" : false,
+      "required" : ["ranks_per_node"],
+      "old_format_prepend" : { "within_section" : "distributed-memory" },
+      "anyOf" : [
+        {
+          "properties" : {
+            "node_pool_strategy" : { "enum" : ["sfc_diffusion"] }
+          },
+          "required" : [ "ranks_per_node", "primary_ranks_per_node" ]
+        },
+        {
+          "properties" : {
+            "node_pool_strategy" : { "enum" : ["fair","FCFS"] }
+          },
+          "required" : [ "ranks_per_node" ]
+        }
+      ],
+      "properties" : {
+        "load_balancing_type" : {
+          "type" : "string", 
+          "title" : "The load balancing type",
+          "enum" : ["static","dynamic"],
+          "default" : "static",
+          "old_format" : [
+            { "token_after" : "identifier" },
+            { "map_token" : {"static_load_balancing" : "static", "dynamic_load_balancing" : "dynamic" } }
+          ]
+        },
+        "load_balancing_strategy" : {
+          "type" : "string", 
+          "title" : "Determines ranks with too much load",
+          "enum" : ["hotspot","greedy_naive","greedy_regular"],
+          "default" : "fair",
+          "old_format" : [
+            { "token_after" : "configure" },
+            { "filter_token" : ["hotspot", "greedy-naive", "greedy-regular"] }
+          ]
+        }, 
+        "node_pool_strategy" : {
+          "type" : "string", 
+          "title" : "Determines how requests for ranks are dealt with",
+          "enum" : ["fair","FCFS","sfc_diffusion"],
+          "default" : "fair",
+          "old_format" : [
+            { "token_after" : "configure" },
+            { "filter_token" : ["fair", "FCFS", "sfc-diffusion"] }
+          ]
+        },
+        "ranks_per_node" : {
+          "type" : "integer", 
+          "title" : "MPI ranks used per node",
+          "old_format" : { "token_after" : "ranks-per-node" }
+        },
+        "primary_ranks_per_node" : {
+          "type" : "integer", 
+          "title" : "Primary MPI ranks used per node (only SFC-Diffusion node pool strategy)",
+          "old_format" : { "token_after" : "primary-ranks-per-node" }
+        },        
+        "timeout" : {
+          "type" : "number", 
+          "title" : "Timeout for MPI packages in seconds before the simulation is killed", 
+          "default" : 60,
+          "old_format" : { "token_after" : "timeout" }
+        }, 
+        "buffer_size" : {
+          "type" : "integer", 
+          "title" : "Buffer size in bytes per MPI package", 
+          "default" : 64,
+          "old_format" : { "token_after" : "buffer-size" }
+        },
+        "node_pool_timeout" : {
+          "type" : "number", 
+          "title" : "The timeout for receiving an answer message from the node pool (seconds).", 
+          "default" : 1
+        },
+        "max_forks_at_once" : {
+          "type" : "integer", 
+          "title" : "The number of forks the load balancing can perform at once on the critical worker (a number < 1 mean that no limit is applied).",
+          "default": -1
+        }
+      }
+    }, 
+    "optimisation" : {
+      "type" : "object",
+      "scope" : "run-time",
+      "used-by" : "toolkit",
+      "$comment" : "This could also just be an open object where anything could be stored and content is not enforced by the schema.",
+      "additionalProperties" : false,
+      "old_format_prepend" : { "within_one_of_the_sections" : ["global-optimisation", "optimisation"] },
+      "properties" : {
+        "limiting" : {
+          "type" : "string", 
+          "default" : "dynamic",
+          "enum" : ["dynamic","static"]
+        },
+        "mesh_refinement" : {
+          "type" : "string", 
+          "default" : "dynamic",
+          "enum" : ["dynamic","static"]
+        },
+        "fuse_algorithmic_steps" : {
+          "type" : "string", 
+          "default" : "none",
+          "enum" : ["none","most","all"],
+          "old_format" : { "token_after" : "fuse-algorithmic-steps" }
+        }, 
+        "fuse_algorithmic_steps_rerun_factor" : {
+          "type" : "number", 
+          "title" : "Factor used for resetting the time step size if the last estimate was not stable according to the CFL condition. Only used if all algorithmic phases are used and nonlinear PDEs are considered.",
+          "default" : 0.99,
+          "old_format" : { "token_after" : "fuse-algorithmic-steps-factor" }
+        },
+        "fuse_algorithmic_steps_diffusion_factor" : {
+          "type" : "number", 
+          "title" : "Factor to estimate the next time step size. Adds numerical diffusion, the smaller it gets. Only used if all algorithmic phases are used and nonlinear PDEs are considered.",
+          "default" : 0.99
+        },
+        "spawn_predictor_as_background_thread" : {
+          "type" : "boolean", 
+          "title" : "Whether to spawn the predictor or the first and intermediate fused time steps as background jobs.",
+          "default" : false,
+          "old_format" : { "token_after" : "spawn-predictor-as-background-thread" }
+        },
+        "spawn_update_as_background_thread" : {
+          "type" : "boolean", 
+          "title" : "Wether to spawn the update or the last fused time step in a batch as a background job",
+          "default" : false
+        },
+        "spawn_prolongation_as_background_thread" : {
+          "type" : "boolean", 
+          "title" : "Wether to spawn the face data prolongation as a background thread, or so.",
+          "default" : false
+        },
+        "spawn_amr_background_threads" : {
+          "type" : "boolean", 
+          "title" : "Wether to spawn the predictor as a background thread, or so.",
+          "default" : false,
+          "old_format" : { "token_after" : "spawn-amr-background-threads" }
+        }, 
+        "spawn_neighbour_merge_as_thread" : {
+          "type" : "boolean", 
+          "title" : "Whether to run the neighbour merges (Riemann solves, copying of boundary layers,...) per face adjacent to a vertex in parallel, too. Concurrency level is 4 in 2D and 12 in 3D multiplied with the number of vertices per regular subgrid.",
+          "default" : false
+        },
+        "disable_vertex_exchange_in_time_steps" : {
+          "type" : "boolean", 
+          "title" : "Turn off the Peano vertex exchange during time stepping iterations",
+          "default" : false,
+          "old_format" : { "token_after" : "disable-vertex-exchange-in-time-steps" }
+        }, 
+        "time_step_batch_factor" : {
+          "type" : "number", 
+          "title" : "This factor determines how many time steps are run as a batch", 
+          "default" : 0.0,
+          "old_format" : { "token_after" : "disable-vertex-exchange-in-time-steps" }
+        },
+        "disable_metadata_exchange_in_batched_time_steps" : {
+          "type" : "boolean", 
+          "title" : "Turn off the exchange of ExaHyPE solver metadata during batched time steps",
+          "default" : false,
+          "old_format" : { "token_after" : "disable-metadata-exchange-in-batched-time-steps" }
+        },
+        "double_compression" : {
+          "type" : "number",
+          "title" : "The double compression factor. 0.0 turns double compression off.", 
+          "default" : 0.0,
+          "old_format" : { "token_after" : "double-compression" }
+        },
+        "spawn_double_compression_as_background_thread" : {
+          "type" : "boolean", 
+          "title" : "Whether to do double compression in the background", 
+          "default" : false,
+          "old_format" : { "token_after" : "spawn-double-compresion-as-background-thread" }
+        }
+      },
+      "dependencies" : {
+        "spawn_double_compression_as_background_thread" : ["double_compression"],
+        "fuse_algorithmic_steps_rerun_factor" : ["fuse_algorithmic_steps"],
+        "fuse_algorithmic_steps_diffusion_factor" : ["fuse_algorithmic_steps"],
+        "disable_metadata_exchange_in_batched_time_steps" : ["time_step_batch_factor"]
+      }
+    }, 
+    "solvers" : {
+      "type" : "array",
+      "$comment" : "Each simulation has an ordered list of solvers assigned",
+      "additionalProperties" : false,
+      "old_format_prepend" : { "within_sections" : "solver" },
+      "items" : {
+        "type" : "object", 
+        "additionalProperties" : false,
+        "required" : [ "type" ],
+        "anyOf" : [
+          {
+            "properties" : {
+              "type" : { "enum" : ["ADER-DG"] }
+            },
+            "required" : [ "name", "type", "variables","maximum_mesh_size", "order", "aderdg_kernel" ]
+          },
+          {
+            "properties" : {
+              "type" : { "enum" : ["Limiting-ADER-DG"] }
+            },
+            "required" : [ "name", "type", "variables","maximum_mesh_size", "order", "aderdg_kernel", "fv_kernel", "limiter" ]
+          },
+          {
+            "properties" : {
+              "type" : { "enum" : ["Finite-Volumes"] }
+            },
+            "required" : [ "name", "type", "variables","maximum_mesh_size", "patch_size", "fv_kernel" ]
+          }
+        ],
+        "dependencies" : {
+          "patch_size" : {
+            "properties" : {
+              "type" : { "enum" : ["Finite-Volumes"] }
+            }
+          },
+          "order" : {
+            "properties" : {
+              "type" : { "enum" : ["ADER-DG","Limiting-ADER-DG"] }
+            }
+          },
+          "limiter" : {
+            "properties" : {
+              "type" : { "enum" : ["Limiting-ADER-DG"] }
+            }
+          },
+          "fv_kernel" : {
+            "properties" : {
+              "type" : { "enum" : ["Finite-Volumes","Limiting-ADER-DG"] }
+            }
+          }
+          
+        },
+        "properties" : {
+          "name" : {
+            "type" : "string", 
+            "title" : "The solver name", 
+            "$comment" : "Is also called 'identifier' in some contexts",
+            "pattern" : "^[a-zA-Z_][a-zA-Z0-9_]*$",
+            "scope" : "compile-time",
+            "used-by" : "toolkit",
+            "old_format" : { "token_after" : { "token" : "solver", "additional_tokens_to_skip" : 1 } },
+            "examples" : [
+              "GRMHDSolver_DG",
+              "HydroSolver",
+              "TheoryOfEverythingSolver_FV"
+            ]
+          }, 
+          "type" : {
+            "type" : "string", 
+            "title" : "The solver type", 
+            "scope" : "compile-time",
+            "used-by" : "toolkit",
+            "old_format" : { "token_after" : "solver" },
+            "enum" : ["ADER-DG","Finite-Volumes","Limiting-ADER-DG"]
+          },
+          "aderdg_kernel" : {
+            "type" : "object",
+            "scope" : "compile-time",
+            "required" : [ "terms" ],
+            "additionalProperties" : "false",
+            "properties" : {
+              "implementation" : {
+                "type" : "string",
+                "title" : "Use generic or optimised kernels, or implement your own kernels",
+                "enum" : ["generic", "optimised", "user" ],
+                "default" : "generic"
+              },
+              "adjust_solution" : {
+                "type" : "string",
+                "title" : "Wether to adjust solutions per patch (DG cell / FV patch) or per point (DG node, FV subcell) )",
+                "enum" : ["patchwise", "pointwise"],
+                "default" : "pointwise"
+              },
+              "allocate_temporary_arrays" : {
+                "type" : "string",
+                "title" : "Where to allocate storage in the solver kernel interface. Heap known to be safer for large PDEs",
+                "enum" : ["stack","heap"],
+                "default" : "heap"
+              },
+              "space_time_predictor" : {
+                "type" : "object",
+                "title" : "Turn certain features on/off for the space time predictor",
+                "properties" : {
+                  "notimeavg" : {
+                    "type" : "boolean",
+                    "available-for" : ["generic"],
+                    "title" : "I have no clue, but generic kernels support it."
+                  },
+                  "fix_picard_iterations" : {
+                    "type" : "boolean",
+                    "available-for" : ["optimised","generic"],
+                    "title" : "Fix the number of picard iterations to 'order'+1. Otherwise, the iterations are terminated in each cell based on a relative tolerance.",
+                    "default": false
+                  },
+                  "cerkguess" : {
+                    "type" : "boolean",
+                    "available-for" : ["optimised"],
+                    "title" : "Use the continous extrapolated Runge Kutta initial guess for the space time predictor"
+                  },
+                  "split_ck" : {
+                    "type" : "string",
+                    "available-for" : ["optimised"],
+                    "title" : "Use a split Cauchy–Kowalevski for the space time predictor (linear only)",
+                    "enum" : ["disabled","scalar","vectorised"],
+                    "default" : "disabled"
+                  }
+                }
+              },
+              "optimised_kernel_debugging" : {
+                "type" : "array",
+                "title" : "Various flags for debugging/developing the optimised kernels",
+                "items" : {
+                  "type" : "string",
+                  "enum" : ["converter", "flops"]
+                }
+              },
+              "terms" : {
+                "type" : "array", 
+                "title" : "PDE terms to generate code for",
+                "$comment" : "'material_parameters' should be renamed",
+                "items" : { 
+                  "type" : "string", 
+                  "enum" : ["flux", "source", "ncp", "material_parameters", "point_sources", "viscous_flux"]
+                }
+              },
+              "optimised_terms" : {
+                "type" : "array",
+                "title" : "Only optimised kernels: For which PDE terms should be code generated",
+                "items" : {
+                  "type" : "string",
+                  "enum" : ["fusedsource", "flux_vect", "fusedsource_vect", "ncp_vect", "material_parameters_vect"]
+                }
+              },
+              "language" : {
+                "type" : "string", 
+                "title" : "The walking dead",
+                "enum" : ["C","Fortran"],
+                "default" : "C"
+              }, 
+              "nonlinear" : {
+                "type" : "boolean", 
+                "title" : "Is the PDE nonlinear?", 
+                "default" : true
+              },
+              "basis" : {
+                "type" : "string", 
+                "title" : "Basis functions", 
+                "enum" : ["Legendre","Lobatto"],
+                "default" : "Legendre"
+              }
+            }
+          },
+          "fv_kernel" : {
+            "type" : "object",
+            "scope" : "compile-time",
+            "required" : [ "terms" ],
+            "additionalProperties" : "false",
+            "properties" : {
+              "implementation" : {
+                "type" : "string",
+                "title" : "Use generic kernels, or implement your own kernels",
+                "enum" : ["generic", "user" ],
+                "default" : "generic"
+              },
+              "adjust_solution" : {
+                "type" : "string",
+                "title" : "Wether to adjust solutions per patch (FV patch) or per point (FV subcell) )",
+                "enum" : ["patchwise", "pointwise"],
+                "default" : "pointwise"
+              },
+              "allocate_temporary_arrays" : {
+                "type" : "string",
+                "title" : "Where to allocate storage in the solver kernel interface. Heap known to be safer for large PDEs",
+                "enum" : ["stack","heap"],
+                "default" : "heap"
+              },
+              "terms" : {
+                "type" : "array", 
+                "title" : "PDE terms to generate code for ",
+                "$comment" : "material_parameters not supported yet",
+                "items" : { 
+                  "type" : "string", 
+                  "enum" : ["flux", "source", "ncp", "point_sources", "viscous_flux" ]
+                }
+              },
+              "language" : {
+                "type" : "string", 
+                "title" : "The walking dead",
+                "enum" : ["C","Fortran"],
+                "default" : "C"
+              }, 
+              "scheme" : {
+                "type" : "string", 
+                "title" : "The underlying FV solver scheme", 
+                "enum" : ["musclhancock","godunov","robustmusclhancock"],
+                "default" : "godunov"
+              },
+              "slope_limiter" : {
+                "type" : "string",
+                "title" : "Slope/Flux limiter for high order FV (not applicable with godunov scheme)",
+                "enum" : ["minmod","koren","superbee","vanalbada","mclim"],
+                "default" : "minmod"
+              }
+            }
+          }, 
+          "variables" : {
+          	"$ref" : "#/definitions/variables",
+            "scope" : "compile-time",
+            "used-by" : "toolkit",
+            "$comment" : "Variables must be ordered, hence an array. Note that {'rho':1,'vel':3,'E':1} is hardly scheme-able",
+            "old_format" : { "detect_variable_list_after" : "variables" }
+          },
+          "material_parameters" : {
+            "$ref" : "#/definitions/variables",
+            "scope" : "compile-time",
+            "used-by" : "toolkit",
+            "$comment" : "Material parameters must be ordered, hence an array. Note that {'rho':1,'vel':3,'E':1} is hardly scheme-able",
+            "old_format" : { "detect_variable_list_after" : "material-parameters" }
+          }, 
+          "point_sources" : {
+            "oneOf" : [
+              { 
+                "type" : "integer",
+                "scope" : "compile-time",
+                "used-by" : "toolkit",
+                "$comment" : "Specify number of point sources",
+                "default" : 0
+              },
+              { 
+                "type" : "array",
+                "scope" : "compile-time",
+                "used-by" : "toolkit",
+                "$comment" : "Specify point source locations",
+                "items" : {
+                  "type" : "array",
+                  "title" : "Point source location",
+                  "default" : [0.0, 0.0, 0.0],
+                  "items" : {
+                    "type" : "number", 
+                    "scope" : "compile-time"
+                  },
+                  "minItems" : 2,
+                  "maxItems" : 3
+                }
+              }
+            ]
+          }, 
+          "global_observables" : {
+          	"$ref" : "#/definitions/variables",
+            "scope" : "compile-time",
+            "used-by" : "toolkit",
+            "$comment" : "global observables must be ordered, hence an array. Note that {'rho':1,'vel':3,'E':1} is hardly scheme-able"
+          }, 
+          "maximum_mesh_size" : {
+            "type" : "number", 
+            "title" : "Minimum size of finest cell in the overall grid",
+            "scope" : "run-time",
+            "old_format" : { "token_after" : "maximum-mesh-size" }
+          },
+          "maximum_mesh_depth" : {
+            "type" : "integer", 
+            "title" : "Maximum number of adaptive refinement levels.",
+            "scope" : "run-time",
+            "old_format" : { "token_after" : "maximum-mesh-depth" }
+          }, 
+          "order" : {
+            "type" : "integer", 
+            "title" : "Approximation order of the scheme",
+            "$comment" : "With pure FV, this value is ignored. With Limiter, this value determines the patch_size",
+            "scope" : "compile-time",
+            "old_format" : { "token_after" : "order" }
+          }, 
+          "patch_size" : {
+            "type" : "integer", 
+            "title" : "Number of subcells per coordinate direction (no ghost)",
+            "$comment" : "With pure DG, this value is ignored. With Limiter, this value is determined by the order",
+            "scope" : "compile-time"
+          },
+          "halo_cells" : {
+            "type" : "integer", 
+            "title" : "Number of halo cells around finest grid cell which requests further refinement or wants to be kept.",
+            "scope" : "run-time"
+          },
+          "regularised_fine_grid_levels" : {
+            "type" : "integer", 
+            "title" : "Number of quantities considered by the discrete maximum principle (only Limiting-ADER-DG solver)",
+            "scope" : "run-time"
+          },
+          "limiter" : {
+            "title" : "Limiting-ADER-DG-specific settings",
+            "type" : "object",
+            "additionalProperties" : "false",
+            "properties" : {
+              "implementation" : {
+                "type" : "string",
+                "title" : "Use generic or optimised kernels",
+                "enum" : ["generic", "optimised" ],
+                "default" : "generic"
+              },
+              "dmp_observables" : {
+                "id" : "dmp_observables",
+                "type" : "integer", 
+                "title" : "Number of quantities considered by the discrete maximum principle (only Limiting-ADER-DG solver)",
+                "scope" : "compile-time",
+                "default" : 0
+              },
+              "dmp_relaxation_parameter" : {
+                "id" : "dmp_relaxation_parameter",
+                "type" : "number", 
+                "title" : "The difference scaling used by the discrete maximum principle (only Limiting-ADER-DG solver)",
+                "scope" : "run-time",
+                "default" : 1e-3
+              },
+              "dmp_difference_scaling" : {
+                "id" : "dmp_difference_scaling",
+                "type" : "number", 
+                "title" : "The discrete maximum principle relaxation parameter (only Limiting-ADER-DG solver)",
+                "scope" : "run-time",
+                "default" : 1e-4
+              }
+            }
+          },
+          "time_stepping" : {
+            "type" : "string", 
+            "default" : "global",
+            "enum" : ["global","globalfixed"],
+            "scope" : "run-time",
+            "old_format" : { "token_after" : "time-stepping" }
+          },
+          "_plotters" : {},
+          "plotters" : {
+            "$comment" : "Each solver has an ordered list of plotters assigned. The order and name of plotters is a compile time constant",
+            "type" : "array",
+            "required" : [ "name", "type", "output", "variables", "repeat" ],
+            "old_format_prepend" : { "within_sections" : "plot" },
+            "items" : {
+              "type" : "object", 
+              "properties" : {
+                "type" : {
+                  "title" : "Which plotter device to adopt", 
+                  "$comment" : "Also refered to as identifier",
+                  "scope" : "run-time",
+                  "old_format" : { "token_after" : "plot" },
+                  "anyOf" : [
+                    {
+                      "type" : "string",
+                      "$comment" : "Something like vtk::Cartesian::vertices::ascii"
+                    },
+                    {
+                      "type" : "array",
+                      "$comment" : "All keywords as list",
+                      "items" : { "type" : "string" }
+                    }
+                  ],
+                  "examples" : [
+                    "vtk::Cartesian::vertices::ascii",
+                    ["vtk","Cartesian","vertices","ascii"]
+                  ]
+                },
+                "name" : {
+                  "type" : "string", 
+                  "title" : "Name of the plotter, will be generated as filename and C++ type name (compile-time constant)",
+                  "pattern" : "^[a-zA-Z_][a-zA-Z0-9_]*$",
+                  "scope" : "compile-time",
+                  "used-by" : "toolkit",
+                  "old_format" : { "token_after" : { "token" : "plot", "additional_tokens_to_skip" : 1 } }
+                },
+                "output" : {
+                  "type" : "string", 
+                  "title" : "(Base) filename where to output results to", 
+                  "scope" : "run-time",
+                  "examples" : [
+                    "./vtk-output/conserved",
+                    "data/someFields"
+                  ]
+                }, 
+                "variables" : {
+                  "title" : "How much variables the plotter writes (Compile-time)",
+                  "$comment" : "Named variables could be once passed to the plotters to have speaking output (TODO: rename)",
+                  "scope" : "compile-time",
+                  "additionalProperties" : false,
+                  "properties" : { "$ref" : "#/definitions/variables" }
+                  
+                }, 
+                "repeat" : {
+                  "type" : "number", 
+                  "title" : "Request periodic plotting repeated every t, in coordinate time",
+                  "minimum" : 0,
+                  "exclusiveMinimum" : true,
+                  "examples" : [
+                    0.0010513,
+                    100000.0
+                  ]
+                }, 
+                "time" : {
+                  "type" : "number", 
+                  "title" : "Time at which periodic plotting should start, in coordinate time", 
+                  "default" : 0
+                },
+                "select" : {
+                  "$comment" : "Spatial dimensional slicing, invented by Tobias for seismic probes. This is always an object, if users set 'dummy', they should remove the statement instead.",
+                  "type" : "object",
+                  "examples" : [
+                    { "x" : 0 },
+                    { "x" : 0, "y" : 1 },
+                    { "x" : 3.14, "y" : 2.7, "z" : 1.4 }
+                  ]
+                },
+                "parameters" : {
+                  "title" : "Run-time parameters handed over to the plotter/post-processing tool",
+                  "$comment" : "Can be used for spatial dimensional slicing, introduced by Tobias for seismic probes. This is always an object.",
+                  "scope" : "run-time",
+                  "old_format" : { "token_after" : { "token" : "select", "additional_tokens_to_skip" : 1 } },
+                  "anyOf" : [
+                    { "type" : "object" },
+                    { "type" : "array" }
+                  ],
+                  "examples" : [
+                    { "x" : 0 },
+                    { "x" : 0, "y" : 1 },
+                    { "x" : 3.14, "y" : 2.7, "z" : 1.4 }
+                  ]
+                }
+              }
+            }
+          }, 
+          "parameters" : {
+            "anyOf" : [
+              { "type" : "object" },
+              { "type" : "array" }
+            ],
+            "$comment" : "Should be named constants, as in the specfiles! Or runtime-constants, or user-constants.",
+            "title" : "Free runtime parameters, however compile-time in terms of parameters support to be compiled in by toolkit",
+            "scope" : "compile-time"
+          }
+        }
+      }
+    }
+  }
+}

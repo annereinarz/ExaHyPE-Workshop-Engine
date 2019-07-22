@@ -1,0 +1,118 @@
+{# /**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/ #}
+
+#include <mm_malloc.h> //g++
+
+#include "{{pathToOptKernel}}/DGMatrices.h"
+
+//DGMatrices
+double* {{codeNamespace}}::Kxi;
+double* {{codeNamespace}}::Kxi_T;
+double* {{codeNamespace}}::iK1_T;
+double* {{codeNamespace}}::dudx;
+double* {{codeNamespace}}::dudx_T;
+double* {{codeNamespace}}::FLCoeff;
+double* {{codeNamespace}}::FRCoeff;
+double** {{codeNamespace}}::fineGridProjector1d;
+double** {{codeNamespace}}::fineGridProjector1d_T_weighted;
+
+
+void {{codeNamespace}}::freeDGMatrices() {
+  _mm_free(FLCoeff);
+  _mm_free(FRCoeff);
+  _mm_free(dudx);
+  _mm_free(dudx_T);
+  _mm_free(iK1_T);
+  _mm_free(Kxi);
+  _mm_free(Kxi_T);
+  
+  _mm_free(fineGridProjector1d[0]);
+  _mm_free(fineGridProjector1d[1]);
+  _mm_free(fineGridProjector1d[2]);
+  delete [] fineGridProjector1d;
+  
+  _mm_free(fineGridProjector1d_T_weighted[0]);
+  _mm_free(fineGridProjector1d_T_weighted[1]);
+  _mm_free(fineGridProjector1d_T_weighted[2]);
+  delete [] fineGridProjector1d_T_weighted;
+}
+
+
+void {{codeNamespace}}::initDGMatrices() {
+  
+  FLCoeff = (double *) _mm_malloc(sizeof(double)*{{nDofPad}}, ALIGNMENT);
+  FRCoeff = (double *) _mm_malloc(sizeof(double)*{{nDofPad}}, ALIGNMENT);
+  //note: FLCoeff is also F0
+  
+  dudx    = (double *) _mm_malloc(sizeof(double)*{{nDofPad*nDof}}, ALIGNMENT);
+  dudx_T  = (double *) _mm_malloc(sizeof(double)*{{nDofPad*nDof}}, ALIGNMENT);
+  iK1_T   = (double *) _mm_malloc(sizeof(double)*{{nDofPad*nDof}}, ALIGNMENT);
+  Kxi     = (double *) _mm_malloc(sizeof(double)*{{nDofPad*nDof}}, ALIGNMENT);
+  Kxi_T   = (double *) _mm_malloc(sizeof(double)*{{nDofPad*nDof}}, ALIGNMENT);
+
+  fineGridProjector1d            = new double* [3];
+  fineGridProjector1d_T_weighted = new double* [3];
+  for(int i=0; i<3; i++) {
+    fineGridProjector1d[i]            = (double *) _mm_malloc(sizeof(double)*{{nDofPad*nDof}}, ALIGNMENT);
+    fineGridProjector1d_T_weighted[i] = (double *) _mm_malloc(sizeof(double)*{{nDofPad*nDof}}, ALIGNMENT);
+  }
+  
+{% for i in nDofPad_seq %}
+  FLCoeff[{{i}}] = {{"{:.15e}".format(FLCoeff[i])}};
+{% endfor %}
+
+{% for i in nDofPad_seq %}
+  FRCoeff[{{i}}] = {{"{:.15e}".format(FRCoeff[i])}};
+{% endfor %}
+
+{% for i in nDofPadTimesnDof_seq %}
+  dudx[{{i}}] = {{"{:.15e}".format(dudx[i])}};
+{% endfor %}
+
+{% for i in nDofPadTimesnDof_seq %}
+  dudx_T[{{i}}] = {{"{:.15e}".format(dudx_T[i])}};
+{% endfor %}
+
+{% for i in nDofPadTimesnDof_seq %}
+  iK1_T[{{i}}] = {{"{:.15e}".format(iK1_T[i])}};
+{% endfor %}
+
+{% for i in nDofPadTimesnDof_seq %}
+  Kxi[{{i}}] = {{"{:.15e}".format(Kxi[i])}};
+{% endfor %}
+
+{% for i in nDofPadTimesnDof_seq %}
+  Kxi_T[{{i}}] = {{"{:.15e}".format(Kxi_T[i])}};
+{% endfor %}
+
+{% for i in nDofPadTimesnDof_seq %}
+  fineGridProjector1d[0][{{i}}] = {{"{:.15e}".format(fineGridProjector1d_0[i])}};
+{% endfor %}
+{% for i in nDofPadTimesnDof_seq %}
+  fineGridProjector1d[1][{{i}}] = {{"{:.15e}".format(fineGridProjector1d_1[i])}};
+{% endfor %}
+{% for i in nDofPadTimesnDof_seq %}
+  fineGridProjector1d[2][{{i}}] = {{"{:.15e}".format(fineGridProjector1d_2[i])}};
+{% endfor %}
+
+{% for i in nDofPadTimesnDof_seq %}
+  fineGridProjector1d_T_weighted[0][{{i}}] = {{"{:.15e}".format(fineGridProjector1d_T_weighted_0[i])}};
+{% endfor %}
+{% for i in nDofPadTimesnDof_seq %}
+  fineGridProjector1d_T_weighted[1][{{i}}] = {{"{:.15e}".format(fineGridProjector1d_T_weighted_1[i])}};
+{% endfor %}
+{% for i in nDofPadTimesnDof_seq %}
+  fineGridProjector1d_T_weighted[2][{{i}}] = {{"{:.15e}".format(fineGridProjector1d_T_weighted_2[i])}};
+{% endfor %}
+
+}

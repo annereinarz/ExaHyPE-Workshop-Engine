@@ -1,0 +1,215 @@
+{#
+
+String time_var        : name of the var used in the outer time loop (use '0' is no time loop)
+String inputQ          : name of ythe input state tensor (e.g. lQi)
+int    inputQ_dataSize : size of the padding in inputQ (e.g. nDataPad)
+String output          : name of the output array
+
+Optional
+
+bool timeInterleaved   (default true) : is time betwenn n and xyz in inputQ
+bool substractToOutput (default false): substract to output instead of adding
+bool writeSource       (default true) : if true use lSi, otherwise use a tmp array
+bool multiplyByWeights (default true) : multiply the output by the quadrature weigths
+
+
+#}
+{% with %}
+{# /**************************************
+   **** Set up helper template values ****
+   **************************************/ #}
+{# // Set default parameter if not set #}
+{% if substractToOutput is not defined %}
+{% set substractToOutput=False %}
+{% endif %}
+{% if writeSource is not defined %}
+{% set writeSource=True %}
+{% endif %}
+{% if multiplyByWeights is not defined %}
+{% set multiplyByWeights=True %}
+{% endif %}
+{% if timeInterleaved is not defined %}
+{% set timeInterleaved=True %}
+{% endif %}
+{# // Set helper values #}
+{% set rest_size=((nDof**nDim)%vectSize) %}
+{% set rest_start=(nDof**nDim)-rest_size %}
+{% if time_var=='0' %}
+{% set useTime=False %}
+{% set inputQ_iterator='xyz*'~inputQ_dataSize %}
+{% set inputQ_iterator_rest=''~rest_start*inputQ_dataSize %}
+{% else %}
+{% set useTime=True %}
+{% if timeInterleaved %}
+{% set inputQ_iterator='(xyz*'~nDof~'+'~time_var~')*'~inputQ_dataSize %}
+{% set inputQ_iterator_rest='('~(rest_start*nDof)~'+'~time_var~')*'~inputQ_dataSize %}
+{% else %}
+{% set inputQ_iterator='('~time_var~'*'~(nDof**nDim)~'+xyz)*'~inputQ_dataSize %}
+{% set inputQ_iterator_rest='('~time_var~'*'~(nDof**nDim)~'+'~rest_start~')*'~inputQ_dataSize %}
+{% endif %}
+{% endif %}
+{% if writeSource %}
+{% set sourceArray='lSi'%}
+{% if useTime %}
+{% set addShift='+('~time_var~'*'~nDof**nDim~'+xyz)*'~nVarPad %}
+{% set addShift_rest='+('~time_var~'*'~nDof**nDim~'+'~rest_start~')*'~nVarPad %}
+{% else %}
+{% set addShift='+xyz*'~nVarPad %}
+{% set addShift_rest='+'~rest_start*nVarPad %}
+{% endif %}
+{% else %}
+{% set sourceArray='tmp_source'%}
+{% set addShift=''%}
+{% endif %}
+{# // Set helper values for vect case #}
+{% if useFusedSourceVect or useSourceVect or useNCPVect %}
+
+{% endif %}
+{# /********************
+   **** Subtemplate ****
+   *********************/ #}
+// Compute the Nonconservative part NCP + Source
+{% if useFusedSourceVect or useSourceVect or useNCPVect %}
+{# /*****************
+   **** vect PDE ****
+   ******************/ #}
+for (int xyz = 0; xyz < {{(nDof**nDim)-((nDof**nDim)%vectSize)}}; xyz+={{vectSize}}) {
+  //transpose to SoA
+  AoS2SoA<{{nData}}, {% if timeInterleaved %}{{inputQ_dataSize*nDof}}{% else %}{{inputQ_dataSize}}{% endif %}>({{inputQ}}+{{inputQ_iterator}}, Qt_block);
+{% if useNCP or useFusedSource %}
+  AoS2SoA<{{nVar}}, {{nVarPad}}>(gradQ+{{nVarPad}}*xyz, gradQt_x_block); //x
+  AoS2SoA<{{nVar}}, {{nVarPad}}>(gradQ+{{nVarPad}}*xyz+{{1*nVarPad*(nDof**nDim)}}, gradQt_y_block); //y
+  AoS2SoA<{{nVar}}, {{nVarPad}}>(gradQ+{{nVarPad}}*xyz+{{2*nVarPad*(nDof**nDim)}}, gradQt_z_block); //z
+{% endif %}
+{% if useFusedSource %}
+  // FusedSource
+  #ifdef USE_IPO
+    #pragma forceinline recursive
+  #endif
+  solver.{{solverName}}::fusedSource_vect(Qt, gradQt, St, {{vectSize}});
+{% else %}{# useFusedSource #}
+{% endif %}
+{% if writeSource %}
+  // Transpose back the result
+  SoA2AoS<{{nVar}}, {{nVarPad}}>(St_block, {{sourceArray}}{{addShift}});
+{% endif %}
+
+  // Update {{output}}
+  for (int it_vect = 0; it_vect < {{vectSize}}; it_vect++) {
+{% if multiplyByWeights %}
+    const double updateSize = weights1[{{time_var}}] * weights3[xyz+it_vect] * dt;
+{% endif %}
+    #pragma vector aligned
+    for (int n = 0; n < {{nVarPad}}; n++) {
+{% if writeSource %}
+      {{output}}[n{{addShift}}+it_vect*{{nVarPad}}] {{ '+' if not substractToOutput else '-'}}= {{ 'updateSize * ' if multiplyByWeights }}{{sourceArray}}[n{{addShift}}+it_vect*{{nVarPad}}];
+{% else %}{# transpose and update #}
+      {{output}}[n{{addShift}}+it_vect*{{nVarPad}}] {{ '+' if not substractToOutput else '-'}}= {{ 'updateSize * ' if multiplyByWeights }}St_block[n*{{vectSize}}+it_vect];
+{% endif %}
+    }
+  }
+}
+{% if rest_size != 0 %}
+// rest 
+{
+  //transpose to SoA
+  AoS2SoA_rest<{{nData}}, {% if timeInterleaved %}{{inputQ_dataSize*nDof}}{% else %}{{inputQ_dataSize}}{% endif %}, {{rest_size}}>({{inputQ}}+{{inputQ_iterator_rest}}, Qt_block);
+{% if useNCP or useFusedSource %}
+  AoS2SoA_rest<{{nVar}}, {{nVarPad}}, {{rest_size}}>(gradQ+{{nVarPad*rest_start}}, gradQt_x_block); //x
+  AoS2SoA_rest<{{nVar}}, {{nVarPad}}, {{rest_size}}>(gradQ+{{nVarPad*rest_start+1*nVarPad*(nDof**nDim)}}, gradQt_y_block); //y
+  AoS2SoA_rest<{{nVar}}, {{nVarPad}}, {{rest_size}}>(gradQ+{{nVarPad*rest_start+2*nVarPad*(nDof**nDim)}}, gradQt_z_block); //z
+{% endif %}
+{% if useFusedSource %}
+  // FusedSource
+  #ifdef USE_IPO
+    #pragma forceinline recursive
+  #endif
+  solver.{{solverName}}::fusedSource_vect(Qt, gradQt, St, {{rest_size}});
+{% else %}{# useFusedSource #}
+{% endif %}
+{% if writeSource %}
+  // Transpose back the result
+  SoA2AoS_rest<{{nVar}}, {{nVarPad}}, {{rest_size}}>(St_block, {{sourceArray}}{{addShift_rest}});
+{% endif %}
+
+  // Update {{output}}
+  for (int it_vect = 0; it_vect < {{rest_size}}; it_vect++) {
+{% if multiplyByWeights %}
+    const double updateSize = weights1[{{time_var}}] * weights3[{{rest_start}}+it_vect] * dt;
+{% endif %}
+    #pragma vector aligned
+    for (int n = 0; n < {{nVarPad}}; n++) {
+{% if writeSource %}
+      {{output}}[n{{addShift_rest}}+it_vect*{{nVarPad}}] {{ '+' if not substractToOutput else '-'}}= {{ 'updateSize * ' if multiplyByWeights }}{{sourceArray}}[n{{addShift_rest}}+it_vect*{{nVarPad}}];
+{% else %}{# transpose and update #}
+      {{output}}[n{{addShift_rest}}+it_vect*{{nVarPad}}] {{ '+' if not substractToOutput else '-'}}= {{ 'updateSize * ' if multiplyByWeights }}St_block[n*{{vectSize}}+it_vect];
+{% endif %}
+    }
+  }
+}
+{% endif %}{# rest_size #}
+{% else %}{# useFusedSourceVect or useSourceVect or useNCPVect #}
+{# /********************
+   **** No vect PDE ****
+   *********************/ #}
+{% if useNCP or useFusedSource %}
+double gradQ_PDE[{{nVar*nDim}}] __attribute__((aligned(ALIGNMENT)));
+{% if not useFusedSource%}
+double tmp_ncp_output[{{nVarPad}}] __attribute__((aligned(ALIGNMENT))) = {0.}; //initialize for padding
+{% endif %}
+{% endif %}
+{% if not writeSource %}
+double {{sourceArray}}[{{nVarPad}}] __attribute__((aligned(ALIGNMENT)));
+{% endif %}
+for(int xyz = 0; xyz < {{nDof**nDim}}; xyz++) {
+{% if useNCP or useFusedSource %}
+  // Remove padding to use the same user function as generic kernel
+  double gradQ_PDE[{{nVar*nDim}}]; 
+  std::copy_n(gradQ+{{nVarPad}}*xyz, {{nVar}}, gradQ_PDE); //x
+  std::copy_n(gradQ+{{nVarPad}}*xyz+{{1*nVarPad*(nDof**nDim)}}, {{nVar}}, gradQ_PDE+{{1*nVar}}); //y
+{% if nDim==3 %}
+  std::copy_n(gradQ+{{nVarPad}}*xyz+{{2*nVarPad*(nDof**nDim)}}, {{nVar}}, gradQ_PDE+{{2*nVar}}); //z
+{% endif %}
+{% endif %}{# useNCP #}
+  
+{% if useFusedSource %}
+  // FusedSource
+  #ifdef USE_IPO
+    #pragma forceinline recursive
+  #endif
+  solver.{{solverName}}::fusedSource({{inputQ}}+{{inputQ_iterator}}, gradQ_PDE, {{sourceArray}}{{addShift}});
+{% else %}{# useFusedSource #}
+{% if useNCP %}
+  // NCP
+  #ifdef USE_IPO
+    #pragma forceinline recursive
+  #endif
+  solver.{{solverName}}::nonConservativeProduct({{inputQ}}+{{inputQ_iterator}}, gradQ_PDE, tmp_ncp_output);
+{% endif %}
+{% if useSource %}
+  // Source
+  #ifdef USE_IPO
+    #pragma forceinline recursive
+  #endif
+  // TODO(JMG): Pass x/t here to enable spatio-temporal source terms.
+  solver.{{solverName}}::algebraicSource({0.0}, 0.0, {{inputQ}}+{{inputQ_iterator}}, {{sourceArray}}{{addShift}});
+{% endif %}
+{% if useNCP %}
+  #pragma omp simd aligned({{sourceArray}},tmp_ncp_output:ALIGNMENT)
+  for(int n = 0; n<{{nVarPad}}; n++) {
+    {{sourceArray}}[n{{addShift}}] {{ '-=' if useSource else '= -'}} tmp_ncp_output[n];{# if not useSource set and update lSi #}
+  }
+{% endif %}
+{% endif %}{# useFusedSource #}
+
+  // Update {{output}}
+{% if multiplyByWeights %}
+  const double updateSize = weights1[{{time_var}}] * weights3[xyz] * dt;
+{% endif %}
+  #pragma omp simd aligned({{output}},{{sourceArray}}:ALIGNMENT)
+  for (int n = 0; n < {{nVarPad}}; n++) {
+    {{output}}[n{{addShift}}] {{ '+' if not substractToOutput else '-'}}= {{ 'updateSize * ' if multiplyByWeights }}{{sourceArray}}[n{{addShift}}];
+  }
+}
+{% endif %}{# non vectorized PDE block#}
+{% endwith %}

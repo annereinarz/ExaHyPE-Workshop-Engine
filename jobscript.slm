@@ -1,0 +1,29 @@
+#!/bin/bash
+# Job Name and Files (also --job-name)
+#SBATCH -J exahype
+#SBATCH --reservation=exahype 
+#SBATCH --cluster=ivymuc
+
+#Output and error (also --output, --error):
+#SBATCH -o ./%x.%j.out
+#SBATCH -e ./%x.%j.err
+
+#Initial working directory (also --chdir):
+#SBATCH -D ./
+
+#Notification and type
+#SBATCH --mail-type=BEGIN,END
+#SBATCH --mail-user=user@host.tld
+
+# Wall clock limit:
+#SBATCH --time=00:10:00
+#SBATCH --no-requeue
+
+# set number of nodes
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+module load python/3.6_intel # toolkit
+
+export OMP_NUM_THREADS=16
+
+srun ./ExaHyPE-EulerADERDG EulerADERDG.exahype 

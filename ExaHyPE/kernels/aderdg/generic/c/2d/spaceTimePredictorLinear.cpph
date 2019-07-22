@@ -1,0 +1,518 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/
+
+#include <cstring>
+#include "../../../../KernelUtils.h"
+
+#if DIMENSIONS == 2
+
+namespace kernels {
+namespace aderdg {
+namespace generic {
+namespace c {
+
+/*
+ * For the linear kernels, we need the material parameters in the
+ * space-time predictor lQi, time-averaged predictor lQhi,
+ * and extrapolated predictor lQhbnd.
+ * Currently we simply copy them over from the solution array.
+ */
+template <bool usePointSource, bool useSource, bool useFlux, bool useNCP, bool useMM,typename SolverType>
+void spaceTimePredictorLinear(SolverType& solver,
+    double* lQbnd, double* lFbnd,
+    double* lQi, double* lFi, double* gradQ,
+    double* PSi, double* PSderivatives, double* tmp_PSderivatives,
+    double* lQhi,double* lFhi,
+    const double* const luh,
+    const tarch::la::Vector<DIMENSIONS, double>& cellCenter,
+    const tarch::la::Vector<DIMENSIONS, double>& invDx,
+    const double t,
+    const double dt
+) {
+  
+  // Define constants
+  constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int numberOfData       = numberOfVariables+numberOfParameters;
+  constexpr int basisSize          = SolverType::Order+1;
+  constexpr int basisSize2         = basisSize * basisSize;
+  constexpr int basisSize3         = basisSize2 * basisSize;
+  constexpr int order              = basisSize - 1;
+  
+  constexpr int sourceIndex = DIMENSIONS;
+
+  const double invDt = 1. / dt;
+  
+  // Matrices
+  
+  //double* PSi = tempPointForceSources[0];    // nullptr if bnot usePointSource,  size: basisSize2 * (basisSize + 1) * numberOfVariables
+  idx4 idx_PSi(basisSize + 1, basisSize, basisSize, numberOfVariables);
+  
+  //double* PSderivatives = tempPointForceSources[1]; // nullptr if bnot usePointSource, size: basisSize2 * (basisSize + 1) * numberOfVariables
+  //double* tmp_PSderivatives = tempSpaceTimeFluxUnknowns[0]; // it's actually lFi used here as a temp array //TODO do something cleaner?
+  idx4 idx_PSderivatives(basisSize, basisSize, basisSize, numberOfVariables); //no need for 0th time derivative
+  
+  //double* lQi = tempSpaceTimeUnknowns[0]; // size: basisSize2 * (basisSize + 1) * numberOfData;
+  idx4 idx_lQi(basisSize + 1, basisSize, basisSize, numberOfData);
+  std::fill_n(lQi, basisSize2 * (basisSize + 1) * numberOfData, 0.);
+
+  //double* lFi = tempSpaceTimeFluxUnknowns[0]; // size: basisSize3 * DIMENSIONS+1 * numberOfVariables
+  idx5 idx_lFi(basisSize, basisSize, basisSize, DIMENSIONS+1, numberOfVariables);
+  std::fill_n(lFi,basisSize3*(DIMENSIONS+1)*numberOfVariables, 0.);
+
+  //double* gradQ = tempSpaceTimeFluxUnknowns[1]; //  nullptr if not useNCP, size: basisSize2 * DIMENSIONS * numberOfVariables
+  idx4 idx_gradQ(basisSize, basisSize, DIMENSIONS, numberOfVariables);
+
+  idx3 idx_luh(basisSize, basisSize, numberOfData);
+  
+  // local tmp array
+  double fluxDerivative[basisSize*numberOfVariables];
+  idx2 idx_fluxDerivative(basisSize, numberOfVariables);
+  
+  idx2 idx_ncpResult(DIMENSIONS, numberOfVariables);
+  double* ncpResult[DIMENSIONS];
+  double ncpResult_vec[numberOfVariables*DIMENSIONS] = {0.0};
+  
+  ncpResult[0] = &ncpResult_vec[idx_ncpResult(0,0)];
+  ncpResult[1] = &ncpResult_vec[idx_ncpResult(1,0)];
+  
+  //***************************
+  //**** Cauchy-Kovalewski ****
+  //***************************
+  
+  
+  // 1. Initialize time derivative
+  // The zeroth time derivative (time dof number 1) is the initial condition
+  
+  for (int i = 0; i < basisSize; i++) {
+    for (int j = 0; j < basisSize; j++) {
+    // Copy parameters here
+      std::copy_n(luh + idx_luh(i, j, 0), numberOfData, lQi + idx_lQi(0, i, j, 0));
+    }
+  }
+
+  
+  //2. Add point source (if required) to the zeroth time derivative 
+  if(usePointSource){
+    for (int j = 0; j < basisSize; j++) {
+      for (int k = 0; k < basisSize; k++) {
+        for (int m = 0; m < numberOfVariables; m++) { //skip parameters
+          double sum = 0.0;
+          for (int n = 1; n <  basisSize+1; n++) {
+#if defined(_GLL)
+            const double weight = gaussLobattoWeights[order][n-1];
+#else      
+            const double weight = gaussLegendreWeights[order][n-1];
+#endif 
+            sum = sum +   weight*PSi[idx_PSi(n, j, k, m)];
+          }
+          lQi[idx_lQi(0, j, k, m)] += dt*sum; 
+        }     
+      }
+    }
+
+    // copy the source vector at the quadrature nodes  into the temporary array PSderivatives (remove 0th time derivative)
+    std::copy_n(PSi+idx_PSi(1,0,0,0), basisSize2 * basisSize * numberOfVariables, PSderivatives);
+
+
+    // Add point source to the first time derivative
+    for (int j = 0; j < basisSize; j++) {
+      for (int k = 0; k < basisSize; k++) {
+        for (int n = 0; n < numberOfVariables; n++) { //skip parameters
+          lQi[idx_lQi(1, j, k,  n)] += PSi[idx_PSi(0, j, k,  n)];
+        }    
+      }
+    }
+
+    
+    for (int i = 2; i < basisSize; i++) {
+      std::fill_n(tmp_PSderivatives,basisSize3*basisSize*numberOfVariables, 0.0); //zero out tmp array
+      // compute (t+1)-th derivative in time of point source
+      for(int t = 0; t < basisSize; t ++ ){
+        for (int j = 0; j < basisSize; j++) {
+          for (int k = 0; k < basisSize; k++) {
+            for (int n = 0; n < numberOfVariables; n++) { //skip parameters
+              for (int s = 0; s < basisSize; s++) {
+                tmp_PSderivatives[idx_PSderivatives(t, j, k, n)] += PSderivatives[idx_PSderivatives(s, j, k, n)] * kernels::dudx[order][t][s] * invDt;
+              } //s
+            } //n
+          } //k
+        } //j
+      } //t
+
+      // project derivative on to t_n
+      for (int j = 0; j < basisSize; j++) {
+        for (int k = 0; k < basisSize; k++) {
+          for (int n = 0; n < numberOfVariables; n++) { //skip parameters
+            for(int t = 0; t < basisSize; t ++ ){
+              lQi[idx_lQi(i, j, k, n)] += tmp_PSderivatives[idx_PSderivatives(t, j, k, n)]*kernels::FLCoeff[order][t];
+            } //t
+          } //n
+        } //k
+      } // j
+
+      // store (t+1)-th derivative in PSderivatives
+      std::copy_n(tmp_PSderivatives, basisSize2 * basisSize * numberOfVariables, PSderivatives); 
+      
+    } // i
+    std::fill_n(lFi,basisSize3*(DIMENSIONS+1)*numberOfVariables, 0.); // zero out sources;
+  } //usePointSource
+  
+  // 3. Cauchy-Kovalewski procedure
+  for (int i = 0; i < basisSize; i++) {  // time DOFs
+  
+    if(useFlux){
+      for (int j = 0; j < basisSize; j++) {
+        for (int k = 0; k < basisSize; k++) {
+          double* F[2];
+          F[0]      = lFi + idx_lFi(i, j, k, 0, 0);
+          F[1]      = lFi + idx_lFi(i, j, k, 1, 0);
+          solver.flux(&lQi[idx_lQi(i, j, k, 0)], F );
+        }
+      }
+
+      //dflux1 dx
+      for (int j = 0; j < basisSize; j++) {
+          std::fill_n(&fluxDerivative[0],basisSize*numberOfVariables, 0.);
+          for (int l = 0; l < basisSize; l++) {
+            for (int m = 0; m < numberOfVariables; m++) {
+              for (int n = 0; n < basisSize; n++) {
+                fluxDerivative[idx_fluxDerivative(l,m)] += lFi[idx_lFi(i, j, n, 0, m)]*
+                kernels::dudx[order][l][n] * invDx[0] ;
+              }
+            }
+          }
+          for (int l = 0; l < basisSize; l++) {
+            for (int m = 0; m < numberOfVariables; m++) {
+              lFi[idx_lFi(i, j, l, 0, m)] = fluxDerivative[idx_fluxDerivative(l,m)];
+            }
+          }
+      }
+
+      //dflux2 dy
+      for (int j = 0; j < basisSize; j++) {
+        std::fill_n(&fluxDerivative[0],basisSize*numberOfVariables, 0.);
+        for (int l = 0; l < basisSize; l++) {
+          for (int m = 0; m < numberOfVariables; m++) {
+            for (int n = 0; n < basisSize; n++) {
+              fluxDerivative[idx_fluxDerivative(l,m)] += lFi[idx_lFi(i, n, j, 1, m)]*
+              kernels::dudx[order][l][n] * invDx[1] ;
+              
+            }
+          }
+        }
+        for (int l = 0; l < basisSize; l++) {
+          for (int m = 0; m < numberOfVariables; m++) {
+            lFi[idx_lFi(i, l, j, 1, m)] = fluxDerivative[idx_fluxDerivative(l,m)];
+          }
+        }
+      }
+
+    } //useFlux
+  
+    if(useNCP){
+      
+      std::fill_n(gradQ, basisSize2 * DIMENSIONS * numberOfVariables, 0.); //reset gradQ
+      
+      // Compute the derivatives in x direction (independent from the y and z derivatives)
+      for (int j = 0; j < basisSize; j++) { // y-loop
+        // Fortran: gradQ(:,1,:,j,i) = 1.0/dx(1) * lqh(:,:,j,i) * dudx(:,:)^T
+        for (int l = 0; l < basisSize; l++) {  // x-loop
+          for (int m = 0; m < numberOfVariables; m++) { // Skip parameters
+            for (int n = 0; n < basisSize; n++) {
+              gradQ[idx_gradQ(j, l, 0, m)] += lQi[idx_lQi(i, j, n, m)] * kernels::dudx[order][l][n] * invDx[0];
+            }
+          }
+        }  
+      }
+
+      // y direction (independent from the x and z derivatives)
+      for (int j = 0; j < basisSize; j++) {
+        // Fortran: gradQ(:,2,:,j,i) = 1.0/dx(2) * lqh(:,:,j,i) * dudx(:,:)^T
+        for (int l = 0; l < basisSize; l++) {
+          for (int m = 0; m < numberOfVariables; m++) { // Skip parameters
+            for (int n = 0; n < basisSize; n++) {
+              gradQ[idx_gradQ(l, j, 1, m)] += lQi[idx_lQi(i, n, j, m)] * kernels::dudx[order][l][n] * invDx[1];
+            }
+          }
+        }
+      }
+
+    
+      for (int j = 0; j < basisSize; j++) {
+        for (int l = 0; l < basisSize; l++) {
+          std::fill_n(&ncpResult_vec[0],DIMENSIONS*numberOfVariables, 0.); // zero out ncpResult
+          double* G[2];
+          G[0]      = gradQ + idx_gradQ(j, l, 0, 0);
+          G[1]      = gradQ + idx_gradQ(j, l, 1, 0);
+          solver.nonConservativeProduct(&lQi[idx_lQi(i, j, l, 0)], G, ncpResult);
+          for(int d = 0; d < DIMENSIONS; d++) {
+            for (int n = 0; n < numberOfVariables; n++) {
+              lFi[idx_lFi(i, j, l, d, n)] += ncpResult[d][n];
+            }
+          }
+          
+        }
+      }
+      
+    } //useNCP
+
+    
+    if(useMM){
+      for (int j = 0; j < basisSize; j++) {
+        for (int k = 0; k < basisSize; k++) {
+          double* F[2];
+          F[0]      = lFi + idx_lFi(i, j, k, 0, 0);
+          F[1]      = lFi + idx_lFi(i, j, k, 1, 0);
+          solver.multiplyMaterialParameterMatrix(&lQi[idx_lQi(i, j, k, 0)], F);
+        }
+      }
+    } //useMM
+
+    if(useSource){
+      for (int j = 0; j < basisSize; j++) {
+        for (int k = 0; k < basisSize; k++) {
+          const double ti = t + kernels::gaussLegendreNodes[order][i] * dt;
+          const double x = cellCenter[0] + (1./invDx[0]) * (kernels::gaussLegendreNodes[order][k] - 0.5);
+          const double y = cellCenter[1] + (1./invDx[1]) * (kernels::gaussLegendreNodes[order][j] - 0.5);
+          tarch::la::Vector<DIMENSIONS, double> coords = {x, y};
+          solver.algebraicSource(coords, ti, &lQi[idx_lQi(i, j, k, 0)], &lFi[idx_lFi(i, j, k, sourceIndex, 0)]);
+        }
+      }
+    } //useSource
+
+    for (int j = 0; j < basisSize; j++) {
+      for (int k = 0; k < basisSize; k++) {
+          // lQi(:,k,j,i+1) -= SUM(lFi(:,1:nDim,k,j,i)
+          for (int m = 0; m < DIMENSIONS; m++) {
+            for (int n = 0; n < numberOfVariables; n++) { // Skip parameters
+              lQi[idx_lQi(i + 1, j, k, n)] -= lFi[idx_lFi(i, j, k, m, n)];
+            }
+          }
+          if(useSource){
+            for (int n = 0; n < numberOfVariables; n++) { // Skip parameters
+              lQi[idx_lQi(i + 1, j, k, n)] -= lFi[idx_lFi(i, j, k, sourceIndex, n)];
+            }
+          }
+      }
+    }
+
+    // Copy parameters
+    if (numberOfParameters>0) {
+      for (int j = 0; j < basisSize; j++) {
+        for (int k = 0; k < basisSize; k++) {
+          for (int n = numberOfVariables; n <numberOfData; n++) {
+            lQi[idx_lQi(i + 1, j, k, n)] = lQi[idx_lQi(i, j, k, n)];
+          }
+        }
+      }
+    }
+    
+  } //i
+
+  //*****************************
+  //**** Averaging over time ****
+  //*****************************
+  
+  //  double* lQhi = tempUnknowns;
+  idx3 idx_lQhi(basisSize, basisSize, numberOfData);
+  
+  // double* lFhi = tempFluxUnknowns;
+  idx4 idx_lFhi(DIMENSIONS+1, basisSize, basisSize, numberOfVariables);
+
+  // Immediately compute the time-averaged space-time polynomials
+  // Fortran: lQhi(:,:,:) = lQi(:,:,:,1)
+  std::copy_n(lQi, basisSize2 * numberOfData, lQhi); 
+
+  double dtavFac = 0.5 * dt;
+  for (int i = 1; i < basisSize; i++) {
+    // Fortran: lQhi(:,:,:) += dtavFac * lQi(:,i,:,:)
+    for (int j = 0; j < basisSize; j++) {
+      for (int k = 0; k < basisSize; k++) {
+        for (int m = 0; m < numberOfVariables; m++) { // skip parameters
+          lQhi[idx_lQhi(j, k, m)] += dtavFac * lQi[idx_lQi(i, j, k, m)];
+        }
+      }
+    }
+    dtavFac *= dt / (i + 2);
+  }
+
+ 
+  // lFhi(m,k,j,i) = lFi(m,i,k,j,1)
+  for (int i = 0; i < DIMENSIONS; i++) {
+    for (int j = 0; j < basisSize; j++) {
+      for (int k = 0; k < basisSize; k++) {
+        for (int m = 0; m < numberOfVariables; m++) {
+          lFhi[idx_lFhi(i, j, k, m)] = lFi[idx_lFi(0, j, k, i, m)];
+        }
+      }
+    }
+  }
+
+  if(useSource){
+    for (int j = 0; j < basisSize; j++) {
+      for (int k = 0; k < basisSize; k++) {
+        for (int m = 0; m < numberOfVariables; m++) {
+          lFhi[idx_lFhi(sourceIndex, j, k, m)] = lFi[idx_lFi(0, j, k, sourceIndex, m)];
+        }
+      }
+    }
+  }
+
+  dtavFac = 0.5 * dt;
+  for (int i = 1; i < basisSize; i++) {
+    // Fortran: lFhi(n,m,k,j) += dtavFac*lFi(n,j,m,k,i)
+    for (int j = 0; j < DIMENSIONS; j++) {
+      for (int k = 0; k < basisSize; k++) {
+        for (int m = 0; m < basisSize; m++) {
+          for (int n = 0; n < numberOfVariables; n++) {
+            lFhi[idx_lFhi(j, k, m, n)] += dtavFac * lFi[idx_lFi(i, k, m, j, n)];
+          }
+        }
+      }
+    }
+
+    if(useSource){
+      for (int k = 0; k < basisSize; k++) {
+        for (int l = 0; l < basisSize; l++) {
+          for (int n = 0; n < numberOfVariables; n++) {
+            lFhi[idx_lFhi(sourceIndex, k, l, n)] += dtavFac * lFi[idx_lFi(i, k, l, sourceIndex, n)];
+          }   
+        }
+      }
+    }
+    
+    dtavFac *= dt / (i + 2);
+  }
+
+
+  // Add point source to the right hand side
+  if(usePointSource){
+    for (int j = 0; j < DIMENSIONS; j++) {
+      for (int k = 0; k < basisSize; k++) {
+        for (int l = 0; l < basisSize; l++) {
+          for (int n = 0; n < numberOfVariables/* skip parameters */; n++) {
+            double sum = 0.0;
+            for (int n0 = 1; n0 <  basisSize+1; n0++) {
+#if defined(_GLL)
+              const double weight = gaussLobattoWeights[order][n0-1];
+#else      
+              const double weight = gaussLegendreWeights[order][n0-1];
+#endif      
+              sum += weight*PSi[idx_PSi(n0, k, l, n)];
+            }
+            lFhi[idx_lFhi(j, k, l, n)] += sum/DIMENSIONS;
+          }
+        }
+      }
+    }
+  }
+
+  //***********************
+  //**** Extrapolation ****
+  //***********************
+  
+  idx3 idx_lQbnd(2 * DIMENSIONS, basisSize, numberOfData);
+  std::fill_n(lQbnd, 2 * DIMENSIONS * basisSize * numberOfData, 0.);
+
+  idx3 idx_lFbnd(2 * DIMENSIONS, basisSize, numberOfVariables);
+  std::fill_n(lFbnd, 2 * DIMENSIONS * basisSize * numberOfVariables, 0.);
+
+  // x-direction: face 1 (left) and face 2 (right)
+  for (int i = 0; i < basisSize; i++) {
+    // lQbnd(:,i,1) = lQhi(:,:,i) * FLCoeff(:)
+    // lQbnd(:,i,2) = lQhi(:,:,i) * FRCoeff(:)
+    for (int k = 0; k < numberOfData; k++) {
+      for (int l = 0; l < basisSize; l++) {
+        // left
+        lQbnd[idx_lQbnd(0, i, k)] += lQhi[idx_lQhi(i, l, k)] * kernels::FLCoeff[order][l];
+        // right
+        lQbnd[idx_lQbnd(1, i, k)] += lQhi[idx_lQhi(i, l, k)] * kernels::FRCoeff[order][l];
+      }
+    }
+    // lFbnd(:,j,i,1) = lFhi(:,:,j,i,1) * FLCoeff(:)
+    // lFbnd(:,j,i,2) = lFhi(:,:,j,i,1) * FRCoeff(:)
+    for (int k = 0; k < numberOfVariables; k++) {
+      for (int l = 0; l < basisSize; l++) {
+        // left
+        lFbnd[idx_lFbnd(0, i, k)] += lFhi[idx_lFhi(0, i, l, k)] * kernels::FLCoeff[order][l];
+        // right
+        lFbnd[idx_lFbnd(1, i, k)] += lFhi[idx_lFhi(0, i, l, k)] * kernels::FRCoeff[order][l];
+      }
+    }
+  }
+
+
+  // y-direction: face 3 (left) and face 4 (right)
+  for (int i = 0; i < basisSize; i++) {
+    // lQbnd(:,i,3) = lQhi(:,:,i) * FLCoeff(:)
+    // lQbnd(:,i,4) = lQhi(:,:,i) * FRCoeff(:)
+    for (int k = 0; k < numberOfData; k++) {
+      for (int l = 0; l < basisSize; l++) {
+        // left
+        lQbnd[idx_lQbnd(2, i, k)] += lQhi[idx_lQhi(l, i, k)] * kernels::FLCoeff[order][l];
+        // right
+        lQbnd[idx_lQbnd(3, i, k)] += lQhi[idx_lQhi(l, i, k)] * kernels::FRCoeff[order][l];
+      }
+    }
+    // lFbnd(:,i,3) = lFhi(:,:,i,2) * FLCoeff(:)
+    // lFbnd(:,i,4) = lFhi(:,:,i,2) * FRCoeff(:)
+    for (int k = 0; k < numberOfVariables; k++) {
+      for (int l = 0; l < basisSize; l++) {
+      // left
+        lFbnd[idx_lFbnd(2, i, k)] += lFhi[idx_lFhi(1, l, i, k)] * kernels::FLCoeff[order][l];
+        // right
+        lFbnd[idx_lFbnd(3, i, k)] += lFhi[idx_lFhi(1, l, i, k)] * kernels::FRCoeff[order][l];
+      }
+    }
+  }
+
+
+  //friction law: projection of time derivatives
+  /*for (int t = 0; t < basisSize; t++) {
+    for (int j = 0; j < basisSize; j++) {
+    // Fortran:
+    // lQbnd(:,j,1) = lQh(:,:,j) * FLCoeff(:)
+    // lQbnd(:,j,2) = lQh(:,:,j) * FRCoeff(:)
+    // Copy parameters
+    for (int k = 0; k <numberOfData; k++) {
+      for (int l = 0; l < basisSize; l++) {
+        // left
+        lQbnd[idx_lQbnd(t+1, 0, j, k)] +=
+	  lQi[idx_lQi(t,j, l, k)] * kernels::FLCoeff[order][l];
+
+        // right
+        lQbnd[idx_lQbnd(t+1, 1, j, k)] +=
+	  lQi[idx_lQi(t,j, l, k)] * kernels::FRCoeff[order][l];
+	
+	// top
+        lQbnd[idx_lQbnd(t+1, 2, j, k)] +=
+	  lQi[idx_lQi(t,l, j, k)] * kernels::FLCoeff[order][l];
+	
+        // bottom
+        lQbnd[idx_lQbnd(t+1, 3, j, k)] +=
+	  lQi[idx_lQi(t,l, j, k)] * kernels::FRCoeff[order][l];
+
+      }
+    }
+  }
+  }*/
+  
+} //
+
+}  // namespace c
+}  // namespace generic
+}  // namespace aderdg
+}  // namespace kernels
+
+#endif  // DIMENSIONS == 2

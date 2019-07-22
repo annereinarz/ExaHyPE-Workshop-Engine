@@ -1,0 +1,73 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon 
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/
+
+#include <cstring> // memset
+#include "kernels/GaussLegendreQuadrature.h"
+#include "kernels/KernelUtils.h"
+
+
+namespace kernels {
+namespace aderdg {
+namespace generic {
+namespace c {
+
+/**
+ * integrateBoundaryConditions is a helper function for the Solver's
+ * boundaryValues() method which is called by the Kernel's boundaryConditions
+ * method. It allows to compute time integrated boundary conditions.
+ * 
+ * @todo: We could think about offering the time integration for boundary
+ * conditions in a similar manner as with useAdjustSolution, ie. allowing
+ * a mixture of point/patch wise as well as already time integrated BC.
+ *
+ * For an example of how to use this function, cf. the guidebook or the 
+ * SRMHD application.
+ **/
+template <typename SolverType>
+void integrateBoundaryConditions(
+    SolverType& solver,
+    const double* const x, const double t, const double dt,
+    const int faceIndex, const int dir,
+    const double * const fluxIn, const double* const stateIn,
+    double *fluxOut, double* stateOut) {
+
+  const int nVar = SolverType::NumberOfVariables;
+  const int order = SolverType::Order;
+  const int basisSize = order + 1;
+  const int nDim = DIMENSIONS;
+
+  double Qgp[nVar];
+  std::memset(stateOut, 0, nVar * sizeof(double));
+  std::memset(fluxOut, 0, nVar * sizeof(double));
+
+  double Fi[nDim][nVar];
+
+  // Integrate solution in gauss points (Qgp) in time
+  for(int i=0; i < basisSize; i++)  { // i == time
+     const double weight = kernels::gaussLegendreWeights[order][i];
+     const double xi = kernels::gaussLegendreNodes[order][i];
+     double ti = t + xi * dt;
+
+     solver.boundaryValueContributions(x, Qgp, &ti);
+     solver.flux(F, Qgp);
+     for(int m=0; m < nVar; m++) {
+        stateOut[m] += weight * Qgp[m];
+        fluxOut[m]  += weight * F[normalNonZero][m];
+     }
+  }
+}
+
+} // c
+} // generic
+} // aderdg
+} // kernels

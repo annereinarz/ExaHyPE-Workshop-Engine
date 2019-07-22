@@ -1,0 +1,63 @@
+{# /**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/ #}
+
+#include <algorithm>
+
+#include "{{pathToOptKernel}}/Kernels.h"
+#include "{{pathToOptKernel}}/Quadrature.h"
+#include "{{pathToOptKernel}}/DGMatrices.h"
+
+#include "{{solverHeader}}"
+
+void {{codeNamespace}}::boundaryConditions(
+                        {{solverName}}& solver,
+                        double* fluxOut,
+                        double* stateOut,
+                        const double* const fluxIn,
+                        const double* const stateIn,
+                        const double* const cellCentre,
+                        const double* const cellSize,
+                        const double t,const double dt,
+                        const int faceIndex,
+                        const int normalNonZero
+) {                         
+  // Compute if face is "left" (0,2,4) or "right" face (1,2,3).
+  const int f = faceIndex-2*normalNonZero;
+
+  // Determine the free directions from the non-zero normal entry.
+  const int d1 = (3 ^ normalNonZero) / 3; //0->1, 1->0, 2->0 , ^ is bitwise XOR
+{% if nDim == 3 %}
+  const int d2 = 2 - (normalNonZero/2);   //0->2, 1->2, 2->1 
+{% endif %}
+  
+  double x[{{nDim}}];
+  x[normalNonZero] = cellCentre[normalNonZero] + (-0.5 + f)*cellSize[normalNonZero];
+  
+  for (int jj = 0; jj < {{nDof3D}}; jj++) {  // loop over dof, loop removed by compiler if 2D
+{% if nDim == 3 %}
+    x[d2] = cellCentre[d2] + cellSize[d2] * (nodes[jj] - 0.5);
+{% endif %}
+    for (int ii = 0; ii < {{nDof}}; ii++) {  // loop over dof
+      x[d1] = cellCentre[d1] + cellSize[d1] * (nodes[ii] - 0.5); 
+#ifdef USE_IPO
+    #pragma forceinline recursive
+#endif
+    // TODO(JMG): Pass gradient here in case of viscous flux
+    solver.{{solverName}}::boundaryValues(x,t,dt,faceIndex,normalNonZero,
+                          &fluxIn[(jj*{{nDof3D}}+ii)*{{nVarPad}}], &stateIn[(jj*{{nDof3D}}+ii)*{{nDataPad}}],
+					  nullptr,
+                          &fluxOut[(jj*{{nDof3D}}+ii)*{{nVarPad}}],&stateOut[(jj*{{nDof3D}}+ii)*{{nDataPad}}]);   
+    }
+  }
+  
+}

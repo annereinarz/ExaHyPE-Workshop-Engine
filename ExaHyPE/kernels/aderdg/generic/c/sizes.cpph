@@ -1,0 +1,37 @@
+#ifndef __KERNELS_SIZES_SVEN__
+#define __KERNELS_SIZES_SVEN__
+
+#include "kernels/GaussLegendreQuadrature.h" // for gaussLegendreWeights
+#include "peano/utils/Globals.h" // DIMENSIONS
+#include "tarch/la/Vector.h"
+
+namespace kernels {
+
+/**
+ * A helper function to determine the volume element (dV=dx*dy*dz) for an integration
+ * in the ADER scheme where the Gauss Legendre interpolation points are not even equally
+ * distributed.
+ * 
+ * This function could easily be  constexpr if gaussLegendreWeights would be a constexpr.
+ **/
+inline double ADERDGVolume(const int order, const tarch::la::Vector<DIMENSIONS, double>& sizeOfPatch, const tarch::la::Vector<DIMENSIONS, int>& pos) {
+	// Gauss-Legendre weights from pos argument
+	double wx = kernels::gaussLegendreWeights[order][pos[0]];
+	double wy = kernels::gaussLegendreWeights[order][pos[1]];
+	double wz = 1;
+	#ifdef Dim3
+	wz = kernels::gaussLegendreWeights[order][pos[2]];
+	#endif
+
+	// volume form for integration
+	double scaling = tarch::la::volume(sizeOfPatch);
+	
+	return scaling*wx*wy*wz;
+}
+
+
+
+
+} // namespace kernels
+
+#endif /* __KERNELS_SIZES_SVEN__ */

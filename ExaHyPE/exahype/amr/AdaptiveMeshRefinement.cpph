@@ -1,0 +1,57 @@
+
+template <class CellDescription,class CellDescriptionHeap>
+exahype::solvers::Solver::SubcellPosition
+exahype::amr::computeSubcellPositionOfDescendant(const CellDescription& pChild) {
+  assertion1(pChild.getType()==CellDescription::Descendant,pChild.toString());
+  assertion1(CellDescriptionHeap::getInstance().isValidIndex(
+      pChild.getParentIndex()),pChild.getParentIndex());
+
+  // 1. Initialisation.
+  exahype::solvers::Solver::SubcellPosition subcellPosition;
+  subcellPosition.parentCellDescriptionsIndex = pChild.getParentIndex();
+  subcellPosition.parentElement=exahype::solvers::Solver::NotFound;
+  CellDescription* pParent = 0;
+  int parentElement=0;
+  for (auto& p : CellDescriptionHeap::getInstance().getData(
+      pChild.getParentIndex())) {
+    if (p.getSolverNumber()==pChild.getSolverNumber()) {
+      subcellPosition.parentElement = parentElement;
+      pParent = &p;
+      break;
+    }
+    ++parentElement;
+  }
+  // Descendant pChild must always have
+  // a parent in the parent's cell description array.
+  assertion1(pParent!=0,pChild.toString());
+
+  // 2. If the current parent is a Descendant try to determine iteratively the next Cell
+  // or the top most Descendant.
+  while ( pParent->getType()==CellDescription::Descendant ) {
+    const int currentParentIndex =
+        pParent->getParentIndex();
+    assertion1(CellDescriptionHeap::getInstance().isValidIndex(
+        currentParentIndex),currentParentIndex); // Must always hold if the current parent is an (Empty)Descendant
+    int parentElement=0;
+    for (auto& p : CellDescriptionHeap::getInstance().getData(currentParentIndex)) {
+      if (p.getSolverNumber()==pChild.getSolverNumber()) {
+        subcellPosition.parentCellDescriptionsIndex = pParent->getParentIndex();
+        subcellPosition.parentElement               = parentElement;
+        pParent = &p;
+        break;
+      }
+      ++parentElement;
+    }
+  }
+  assertion(pParent->getType() == CellDescription::Descendant ||
+            pParent->getType() == CellDescription::Cell);
+
+  subcellPosition.subcellIndex =
+      computeSubcellIndex(
+          pChild.getOffset(),pChild.getSize(),
+          pParent->getOffset());
+  subcellPosition.levelDifference =
+      pChild.getLevel() - pParent->getLevel();
+
+  return subcellPosition;
+}

@@ -1,0 +1,227 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/
+
+#include "../../Kernels.h"
+
+#include <cstring>
+
+#include <tarch/la/Vector.h>
+
+#include "../../../../DGMatrices.h"
+#include "../../../../GaussLegendreQuadrature.h"
+#include "../../../../KernelUtils.h"
+
+#if DIMENSIONS == 3
+
+/*
+ * Depending on the template parameter noTimeAveraging, lFi
+ * is either a space-time volume flux (false) or a time-averaged flux (true). 
+ */
+template <bool useSourceOrNCP, bool useFlux, bool noTimeAveraging, const int numberOfVariables, int basisSize>
+void kernels::aderdg::generic::c::volumeIntegralNonlinear(double* lduh, const double* const lFi,
+                             const tarch::la::Vector<DIMENSIONS, double>& dx) {
+  const int order = basisSize - 1;
+  const int basisSize2 = basisSize  * basisSize;
+  const int basisSize3 = basisSize2 * basisSize;
+  
+  const double invDx[3] = { 1.0/dx[0], 1.0/dx[1], 1.0/dx[2] };
+
+  // Initialize the update DOF
+  std::fill_n(lduh, basisSize3 * numberOfVariables, 0.0);
+
+  if(noTimeAveraging) {
+    if (useFlux) {
+      idx4 idx(basisSize, basisSize, basisSize, numberOfVariables); // (z,y,x,var)
+      idx6 idx_lFi(basisSize, basisSize, basisSize, basisSize, DIMENSIONS+1, numberOfVariables); // (t,z,y,x,flux/source,var)
+
+      for (int i = 0; i < basisSize; i++) { // loop over time unknowns
+        // x-direction
+        for (int j = 0; j < basisSize; j++) { // z 
+          for (int k = 0; k < basisSize; k++) { // y
+            const double weight =
+                kernels::gaussLegendreWeights[order][i] * // t
+                kernels::gaussLegendreWeights[order][j] * // z
+                kernels::gaussLegendreWeights[order][k];  // y
+
+            const double updateSize = weight * invDx[0];
+            for (int l = 0; l < basisSize; l++) { // x
+              for (int m = 0; m < numberOfVariables; m++) {
+                for (int n = 0; n < basisSize; n++) {  
+                  lduh[idx(j, k, l, m)] += 
+                      kernels::Kxi[order][l][n] *
+                      lFi[idx_lFi(i, j, k, n, 0, m)] * updateSize;
+                }
+              }
+            }
+          }
+        }
+        // y-direction
+        for (int j = 0; j < basisSize; j++) { // z
+          for (int l = 0; l < basisSize; l++) { // x 
+            const double weight =
+                kernels::gaussLegendreWeights[order][i] * // t
+                kernels::gaussLegendreWeights[order][j] * // z
+                kernels::gaussLegendreWeights[order][l];  // x
+            const double updateSize = weight * invDx[1];
+            
+            for (int k = 0; k < basisSize; k++) { // y
+              for (int m = 0; m < numberOfVariables; m++) {
+                for (int n = 0; n < basisSize; n++) {  
+                  lduh[idx(j, k, l, m)] += 
+                      kernels::Kxi[order][k][n] *
+                      lFi[idx_lFi(i, j, n, l, 1, m)] * updateSize;
+                }
+              }
+            }
+          }
+        }
+        // z-direction
+        for (int k = 0; k < basisSize; k++) { // y 
+          for (int l = 0; l < basisSize; l++) { // x
+            const double weight =
+                kernels::gaussLegendreWeights[order][i] * // t
+                kernels::gaussLegendreWeights[order][k] * // y
+                kernels::gaussLegendreWeights[order][l];  // x
+            const double updateSize = weight * invDx[2];
+
+            for (int j = 0; j < basisSize; j++) { // z
+              for (int m = 0; m < numberOfVariables; m++) {
+                for (int n = 0; n < basisSize; n++) {  
+                  lduh[idx(j, k, l, m)] += 
+                      kernels::Kxi[order][j][n] *
+                      lFi[idx_lFi(i, n, k, l, 2, m)] * updateSize;
+                }
+              }
+            }
+          }
+        }
+      }
+    } // useFlux
+
+    // source
+    if (useSourceOrNCP) {
+      idx4 idx(basisSize, basisSize, basisSize, numberOfVariables); // (z,y,x,var)
+      idx6 idx_lFi(basisSize, basisSize, basisSize, basisSize, DIMENSIONS+1, numberOfVariables); // (t,z,y,x,flux/source,var)
+
+      for (int i = 0; i < basisSize; i++) { // loop over time unknowns
+        for (int j = 0; j < basisSize; j++) { // z
+          for (int k = 0; k < basisSize; k++) { // y
+            for (int l = 0; l < basisSize; l++) { // x
+              const double weight =
+                  kernels::gaussLegendreWeights[order][i] * // t
+                  kernels::gaussLegendreWeights[order][j] * // z
+                  kernels::gaussLegendreWeights[order][k] * // y
+                  kernels::gaussLegendreWeights[order][l];  // x
+
+              for (int m = 0; m < numberOfVariables; m++) {
+                lduh[idx(j, k, l, m)] += weight * lFi[idx_lFi(i, j, k, l, 3, m)];
+              }
+            }
+          }
+        }
+      }
+    } // useSource
+  } else { //noTimeAveraging
+    idx4 idx(basisSize, basisSize, basisSize, numberOfVariables);
+
+    if(useFlux) {
+      // x-direction
+      const int x_offset = 0 * basisSize3 * numberOfVariables;
+      for (int i = 0; i < basisSize; i++) {
+        for (int j = 0; j < basisSize; j++) {
+          const double weight = kernels::gaussLegendreWeights[order][i] *
+                                kernels::gaussLegendreWeights[order][j];
+          const double updateSize = weight * invDx[0];
+
+          // Fortran: lduh(l, k, j, i) += us * lFi_x(l, m, j, i) * Kxi(m, k)
+          // Matrix product: (l, m) * (m, k) = (l, k)
+          for (int k = 0; k < basisSize; k++) {
+            for (int l = 0; l < numberOfVariables; l++) {
+              for (int m = 0; m < basisSize; m++) {
+                lduh[idx(i, j, k, l)] += kernels::Kxi[order][k][m] *
+                                         lFi[x_offset + idx(i, j, m, l)] *
+                                         updateSize;
+              }
+            }
+          }
+        }
+      }
+
+      // y-direction
+      const int y_offset = 1 * basisSize3 * numberOfVariables;
+      for (int i = 0; i < basisSize; i++) {
+        for (int j = 0; j < basisSize; j++) {
+          const double weight = kernels::gaussLegendreWeights[order][i] *
+                                kernels::gaussLegendreWeights[order][j];
+          const double updateSize = weight * invDx[1];
+
+          // Fortran: lduh(l, j, k, i) += us * lFi_y(l,m,j,i) * Kxi(m, k)
+          // Matrix product: (l, m) * (m, k) = (l, k)
+          for (int k = 0; k < basisSize; k++) {
+            for (int l = 0; l < numberOfVariables; l++) {
+              for (int m = 0; m < basisSize; m++) {
+                lduh[idx(i, k, j, l)] += kernels::Kxi[order][k][m] *
+                                         lFi[y_offset + idx(i, j, m, l)] *
+                                         updateSize;
+              }
+            }
+          }
+        }
+      }
+
+      // z-direction
+      const int z_offset = 2 * basisSize3 * numberOfVariables;
+      for (int i = 0; i < basisSize; i++) {
+        for (int j = 0; j < basisSize; j++) {
+          const double weight = kernels::gaussLegendreWeights[order][i] *
+                                kernels::gaussLegendreWeights[order][j];
+          const double updateSize = weight * invDx[2];
+
+          // Fortran: lduh(l, j, i, k) += us * lFi_z(l, m, j, i) * Kxi(m, k)
+          // Matrix product (l, m) * (m, k) = (l, k)
+          for (int k = 0; k < basisSize; k++) {
+            for (int l = 0; l < numberOfVariables; l++) {
+              for (int m = 0; m < basisSize; m++) {
+                lduh[idx(k, i, j, l)] += kernels::Kxi[order][k][m] *
+                                         lFi[z_offset + idx(i, j, m, l)] *
+                                         updateSize;
+              }
+            }
+          }
+        }
+      }
+    } // useFlux
+
+    if(useSourceOrNCP) {
+      const int s_offset = 3 * basisSize3 * numberOfVariables;
+      for (int i = 0; i < basisSize; i++) {
+        for (int j = 0; j < basisSize; j++) {
+          for (int k = 0; k < basisSize; k++) {
+            const double weight = kernels::gaussLegendreWeights[order][i] *
+                                  kernels::gaussLegendreWeights[order][j] *
+                                  kernels::gaussLegendreWeights[order][k];
+
+            // Fortran: lduh(:,k,j,i) += w * lShi(:,k,j,i)
+
+            // TODO(guera): numberOfVariables - numberOfParameters
+            for (int l = 0; l < numberOfVariables; l++) {
+              lduh[idx(i, j, k, l)] += weight * lFi[s_offset + idx(i, j, k, l)];
+            }
+          }
+        }
+      }
+    } // useSourceOrNCP
+  }
+}
+
+#endif  // DIMENSIONS == 3

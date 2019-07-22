@@ -1,0 +1,30 @@
+#include "peano/utils/Globals.h"
+
+
+Constant: DIMENSIONS;
+
+
+class pidt::PIDTParticle {
+  enum MoveState {
+    New,
+    NotMovedYet,
+    Moved
+  };
+
+  persistent expose parallelise double  x[DIMENSIONS];
+  persistent expose parallelise double  maxDx;
+  
+  /**
+   * We do not expose this flag as we wanna enable Peano to pack all the 
+   * boolean values into one field. In this example, it is only one bit, so the 
+   * packing is kind of artificial, but the idea is to prepare the code for more 
+   * complicated settings as well. 
+   *
+   * There is no application reason to make this state parallelise, but we are 
+   * moving around particles due to its constructors several times and these 
+   * constructors check all fields for valid values. If we receive something 
+   * not marked as parallelise, we either have to initialise it prior to moving 
+   * or we get garbage. Initialising is tricky, so I just communicate this stuff. 
+   */
+  persistent packed parallelise MoveState   movedParticle;
+};

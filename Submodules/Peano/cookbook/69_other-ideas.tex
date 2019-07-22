@@ -1,0 +1,203 @@
+\section{Compiler-based optimisation}
+
+\chapterDescription
+  {
+    5 minutes
+  }
+  {
+  }
+
+
+Peano's implementation can be tailed by tons of different compile options. 
+At the end of the day, one might have to tailor them on a per-project base. 
+As the settings first of all are tied to a particular machine (besides an
+application), Peano collects all magic variables within a file called
+{\em CompilerSpecificSettings.h}.
+For some default platforms, we provide meaningful results.
+All of these settings however can be overwritten no the command line.
+
+
+\subsection*{Single core}
+
+\begin{center}
+ \begin{tabular}{p{2cm}p{2cm}p{9.5cm}}
+  Compile flag (default) & Alternative & Description \\
+  \hline
+  {\footnotesize Use\-Manual\-Inlining} 
+  & 
+  {\footnotesize noUse\-Manual\-Inlining} 
+  &
+  Compilers are known to implement good heuristics which routines to inline and
+  which not to inline. We however found that some compiler struggle with some
+  parts of Peano. For these parts, we have added compiler-specific annotations
+  that force the compiler to inline. Obviously, the identification of critical
+  code parts has been done for few benchmarks only and it might happen that they 
+  are invalid or even contra-productive for some applications. 
+  \\
+  \hline
+ \end{tabular}
+\end{center}
+  
+
+\subsection*{Shared memory}
+
+\begin{center}
+ \begin{tabular}{p{2cm}p{2cm}p{8cm}l}
+  Compile flag (default) & Alternative & Description & Target \\
+  \hline
+  {\footnotesize UseTBBs\-Parallel\-For\-And\-Reduce} 
+  & 
+  {\footnotesize noUse\-TBBs\-Parallel\-For\-And\-Reduce} 
+  &
+  Different to TBB, Peano's internal task/job system literally is based on
+  tasks only. That is, also parallel loops are mapped onto job spawning. For
+  TBB-based codes, we found that such a realisation is sometimes disadvantageous
+  for larger core counts. The flag allows us to toggle the implementation. 
+  & TBB
+  \\
+  \hline
+  {\footnotesize Boolean\-Semaphore\-Uses\-A\-Spin\-Lock} 
+  & 
+  {\footnotesize noBoolean\-Semaphore\-Uses\-A\-Spin\-Lock} 
+  &
+  The boolean semaphore is either implemented as C++14 \texttt{mutex} or as spin
+  lock. The choice of the implementation is made through this compile option.
+  &
+  C++14
+  \\
+  \hline
+  {\footnotesize Job\-Queue\-Uses\-Spin\-Lock\-Instead\-Of\-Mutex} 
+  & 
+  {\footnotesize noJob\-Queue\-Uses\-Spin\-Lock\-Instead\-Of\-Mutex} 
+  &
+  Job queue modifications typically last longer and thus are by default
+  protected by a mutex. Howeveer, you may also prefer spin locks.
+  &
+  C++14
+  \\ 
+  \hline
+  {\footnotesize Job\-Queue\-Uses\-Stack\-Of\-Befilled\-Queues} 
+  & 
+  {\footnotesize noJob\-Queue\-Uses\-Stack\-Of\-Befilled\-Queues} 
+  &
+  By default, the job queue memorises only which queue saw the last insert. Any
+  job stealing then targets first of all the queue with the last insert.
+  Alternatively, one can ask the queues/runtime system to hold a stack of recent
+  inserts and to work through this stack.
+  & C++14
+  \\
+  \hline
+ \end{tabular}
+\end{center}
+  
+  
+\subsection*{Distributed memory}
+
+\begin{center}
+ \begin{tabular}{p{2cm}p{2cm}p{9.5cm}l}
+  Compile flag (default) & Alternative & Description \\
+  \hline
+  {\footnotesize MPI\-Progression\-Relies\-On\-MPI\-Test} 
+  & 
+  {\footnotesize noMPI\-Progression\-Relies\-On\-MPI\-Test} 
+  &
+  Some MPI implementations struggle to transfer data in the background of the
+  simulation run. In this case, one has to call \texttt{MPI\_Test} over an over
+  again. Each test call allows MPI to progress some messages. Obviously,
+  these calls do not come for free and impose some overhead, too. The flag
+  allows users to disable/enable this test polling. Unless not pinned
+  explicitly to one thread (see below), Peano's hybrid implementation
+  distributes the tests to the cores, i.e.~hardware threads call 
+  \texttt{MPI\_Test} whenever they become idle.
+  \\
+  \hline
+ \end{tabular}
+\end{center}
+
+
+\noindent
+The following variables allow users to tailor the treatment of (logically)
+blocking sends and receives.
+Their default value always is 0. 
+0 means that each blocking operation is mapped onto a non-blocking operation
+followed by a while loop over \texttt{MPI\_Test}. 
+This seems to be inefficient, but actually these tests are intermixed with calls
+to routines of the type \texttt{receiveDanglingMessages} which receive MPI
+messages which should be transferred in the background and might congest the MPI
+buffers at the moment.
+If you set the variables to -1, then Peano replaces this non-blocking
+``pattern'' with real blocking sends and receives.
+If you set them to something greater than 0, then each non-successful test from
+the pattern above is follows by a \texttt{usleep} of the given value. 
+This pattern pays off, if too many ranks poll the MPI subsystem or you use
+hyperthreading and some code parts that want to do MPI calls too suffer
+from starvation.
+
+\begin{itemize}
+  \item SendWorkerMasterMessagesBlocking
+  \item SendMasterWorkerMessagesBlocking
+  \item ReceiveMasterMessagesBlocking
+  \item SendAndReceiveLoadBalancingMessagesBlocking
+  \item ReceiveIterationControlMessagesBlocking
+  \item BroadcastToWorkingNodesBlocking
+  \item SendHeapMetaDataBlocking
+  \item SendAndReceiveHeapSynchronousDataBlocking
+\end{itemize}  
+
+
+
+\subsection*{MPI+X}
+
+
+
+
+
+\begin{center}
+ \begin{tabular}{p{2cm}p{2cm}p{8cm}l}
+  Compile flag (default) & Alternative & Description & Target \\
+  \hline
+   {\footnotesize Multiple\-Threads\-May\-Trigger\-MPI\-Calls} 
+   & 
+   {\footnotesize noMultiple\-Threads\-May\-Trigger\-MPI\-Calls} 
+   &
+   Allow multiple threads to trigger MPI messages. This notably allows Peano to
+   ask idle threads to poll MPI data.
+   & MPI+X
+  \\
+  \hline
+   {\footnotesize MPI\-Uses\-Its\-Own\-Thread} 
+   & 
+   {\footnotesize noMPI\-Uses\-Its\-Own\-Thread} 
+   &
+   The sends and receives along the domain boundary are now pulled by tasks of
+   its own. Whenever a core starts to idle, it invokes \texttt{MPI\_Test} or
+   probes whether there are new messages. This helps to progress MPI messages in
+   the background of the actual simulation.   
+   & MPI+X
+  \\
+  \hline
+   {\footnotesize MPI\-Heap\-Uses\-Its\-Own\-Thread} 
+   & 
+   {\footnotesize noMPI\-Heap\-Uses\-Its\-Own\-Thread} 
+   &
+   Counterpart of flag above which applies to heap data only whereas the above
+   flag affects boundary, i.e.~grid, data only. Please note that Peano creates
+   one job per heap type. If you have many heaps, then many background tasks for
+   the MPI processing are used.
+   & MPI+X
+  \\
+  \hline
+ \end{tabular}
+\end{center}
+
+
+
+\noindent
+Please note that all parameters are written without hyphens, i.e.~a parameter
+alike \texttt{noTrippleX} which is written as no-Tripple-X in the table above is
+switched on on the compiler level through \texttt{-DTrippleX} and disabled
+through \texttt{-DnoTrippleX}.
+
+
+
+

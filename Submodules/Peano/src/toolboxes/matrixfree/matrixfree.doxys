@@ -1,0 +1,12 @@
+/**
+
+ @dir "Matrix Free Toolkit"
+  
+ To recreate the archive, please change into the toolboxes directory and type in
+ \code
+  tar -cvf matrixfree.tar matrixfree --exclude=.svn
+  gzip matrixfree.tar
+  mv matrixfree.tar.gz ../tarballs/toolboxes
+ \endcode
+
+ */ 

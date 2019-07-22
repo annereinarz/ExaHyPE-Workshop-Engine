@@ -1,0 +1,18 @@
+How to install:
+===============
+
+- Build the toolkit (if not done before):
+-- Change into Toolkit directory
+-- Type 
+   ./build.sh
+
+- Generate all gluecode
+-- Change into the ExaHyPE root directory
+-- Type in
+   java -jar Toolkit/dist/ExaHyPE.jar Demonstrators/EulerFV/EulerFV.exahype
+
+- Change into Demonstrators/EulerFV
+-- If you prefer the GNU compiler, change the default compiler
+   export COMPILER=gnu
+-- Type in 
+    make

@@ -1,0 +1,222 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon 
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/
+#ifndef _EXAHYPE_KERNELS_ADERDG_GENERIC_COMPUTEGRADIENTES_H_
+#define _EXAHYPE_KERNELS_ADERDG_GENERIC_COMPUTEGRADIENTES_H_
+
+#include <algorithm> // fill_n
+#include "kernels/DGMatrices.h"
+#include "kernels/GaussLegendreQuadrature.h"
+#include "kernels/KernelUtils.h"
+
+
+namespace kernels {
+namespace aderdg {
+namespace generic {
+namespace c {
+
+/* A helper to determine basisSize^DIMENSIONS */
+inline constexpr int basisSizeD(int basisSize) {
+      //const int basisX = basisSize;
+      //const int basisY = basisSize;
+      //const int basisZ = DIMENSIONS == 3 ? basisSize : 1;
+      //return basisX * basisY * basisZ;
+    return basisSize * basisSize * (DIMENSIONS == 3 ? basisSize : 1);
+}
+
+/**
+ * Helper function to compute the gradients for *all* entries in Q with the 
+ * ADER-DG scheme.
+ * This is not optimal if you need only certain entries.
+ * 
+ * In any case, you have to provide the storage, ie. with
+ * <code>
+ *   double u[numberOfVariables] = ... // your conserved variables
+ *   double dx[3] = {0.5, 0.5, 0.5}; // the cell size
+ *   double gradQ[basisSize3 * DIMENSIONS * numberOfVariables];
+ *   computeGradQ<AbstractYourSolver>(gradQ, u, dx);
+ * </code>
+ * 
+ * Another example how to use is
+ * 
+ * <code>
+ *	using namespace kernels::aderdg::generic::c;	
+ *	double gradQ[basisSizeD(AbstractMyEulerSolver::Order + 1) * DIMENSIONS * AbstractMyEulerSolver::NumberOfVariables];
+ *	computeGradQ<AbstractMyEulerSolver>(gradQ, Q, sizeOfPatch);
+ * </code>
+ * 
+ * For the array ordering, we assume u the DOF (luh) on a whole cell.
+ * The gradQ ordering is: Z, Y, X, nDim, nVars. If you use 2D, you
+ * only need storage for Y, X, nDim, nVars.
+ *
+ * This function is dimension agnostic. It uses the kernels::index and just
+ * undestands basisSize=1 for the z direction if DIMENSIONS == 2. This
+ * applies nicely for the loops as for(int j=0; j<1; j++) { body } just
+ * executes "body" one time.
+ * 
+ * @TODO: This should not be an inline function. Make up a seperate cpp file.
+ **/
+inline void computeGradQ(double* gradQ, const double* const u, const tarch::la::Vector<DIMENSIONS, double>& sizeOfPatch, const int numberOfVariables, const int order) {
+      const int basisSize = order + 1;
+
+      const int basisX = basisSize;
+      const int basisY = basisSize;
+      const int basisZ = DIMENSIONS == 3 ? basisSize : 1;
+
+      // spatial gradient of q: gradQ(z,y,x,nDim,nVar)
+      index idx_gradQ(basisZ, basisY, basisX, DIMENSIONS, numberOfVariables);
+      index idx_u(basisZ, basisY, basisX, numberOfVariables);
+      std::fill_n(gradQ, idx_gradQ.size, 0.0);
+
+      // x direction (independent from the y and z derivatives)
+      for (int j = 0; j < basisZ; j++) { // z
+        for (int k = 0; k < basisY; k++) { // y
+          // Matrix operation
+          for (int l = 0; l < basisX; l++) { // x
+            for (int m = 0; m < numberOfVariables; m++) {
+              for (int n = 0; n < basisSize; n++) { // matmul x
+                gradQ[idx_gradQ(j, k, l, /*x*/0, m)] += 1.0 / sizeOfPatch[0] *
+                        u[idx_u(j, k, n, m)] * kernels::dudx[order][l][n];
+              }
+            }
+          }
+        }
+      }
+
+      // y direction (independent from the x and z derivatives)
+      for (int j = 0; j < basisZ; j++) { // z
+        for (int k = 0; k < basisX; k++) { // x
+          // Matrix operation
+          for (int l = 0; l < basisY; l++) { // y
+            for (int m = 0; m < numberOfVariables; m++) {
+              for (int n = 0; n < basisSize; n++) { // matmul y
+                gradQ[idx_gradQ(j, l, k, /*y*/1, m)] += 1.0 / sizeOfPatch[1] *
+                        u[idx_u(j, n, k, m)] * kernels::dudx[order][l][n];
+              }
+            }
+          }
+        }
+      }
+
+      // z direction (independent from the x and y derivatives)
+      if(DIMENSIONS == 3) {
+        for (int j = 0; j < basisY; j++) { // y
+          for (int k = 0; k < basisX; k++) { // x 
+            // Matrix operation
+            for (int l = 0; l < basisZ; l++) { // z
+              for (int m = 0; m < numberOfVariables; m++) {
+                for (int n = 0; n < basisSize; n++) { // matmul z
+                  gradQ[idx_gradQ(l, j, k, /*z*/2, m)] += 1.0 / sizeOfPatch[2] *
+                          u[idx_u(n, j, k, m)] * kernels::dudx[order][l][n];
+                }
+              }
+            }
+          }
+        }
+      }
+} // computeGradQ
+
+/**
+ * Convenience function to compute the gradient of only a single variable
+ * in a given direction.
+ * One could extend this to compute the gradient of a number of requested
+ * variables (i.e. a mapping or simliar).
+ * 
+ * @param i   Requested Variable I
+ * @param dir Requested Direction
+ * 
+ * For the shapes of the variables, see the idx functions.
+ **/
+inline void computeGradQi(double* gradQi, const double* const u, const int requestedDirection, const int requestedVariableIndex, const tarch::la::Vector<DIMENSIONS, double>& sizeOfPatch, const int numberOfVariables, const int order) {
+      const int basisSize = order + 1;
+      const int basisX = basisSize;
+      const int basisY = basisSize;
+      const int basisZ = DIMENSIONS == 3 ? basisSize : 1;
+
+      index idx_gradQi(basisZ, basisY, basisX);
+      index idx_u(basisZ, basisY, basisX, numberOfVariables);
+      std::fill_n(gradQi, idx_gradQi.size, 0.0);
+
+      // x direction (independent from the y and z derivatives)
+      if(requestedDirection == 0) {
+        for (int j = 0; j < basisZ; j++) { // z
+          for (int k = 0; k < basisY; k++) { // y
+            // Matrix operation
+            for (int l = 0; l < basisX; l++) { // x
+                for (int n = 0; n < basisSize; n++) { // matmul x
+                  gradQi[idx_gradQi(j, k, l)] += 1.0 / sizeOfPatch[0] *
+                          u[idx_u(j, k, n, requestedVariableIndex)] * kernels::dudx[order][l][n];
+                }
+            }
+          }
+        }
+        return;
+      }
+
+      // y direction (independent from the x and z derivatives)
+      if(requestedDirection == 2) {
+        for (int j = 0; j < basisZ; j++) { // z
+          for (int k = 0; k < basisX; k++) { // x
+            // Matrix operation
+            for (int l = 0; l < basisY; l++) { // y
+                for (int n = 0; n < basisSize; n++) { // matmul y
+                  gradQi[idx_gradQi(j, l, k)] += 1.0 / sizeOfPatch[1] *
+                          u[idx_u(j, n, k, requestedVariableIndex)] * kernels::dudx[order][l][n];
+                }
+            }
+          }
+        }
+        return;
+      }
+
+      // z direction (independent from the x and y derivatives)
+      if(requestedDirection == 3) {
+        for (int j = 0; j < basisY; j++) { // y
+          for (int k = 0; k < basisX; k++) { // x 
+            // Matrix operation
+            for (int l = 0; l < basisZ; l++) { // z
+                for (int n = 0; n < basisSize; n++) { // matmul z
+                  gradQi[idx_gradQi(l, j, k)] += 1.0 / sizeOfPatch[2] *
+                          u[idx_u(n, j, k, requestedVariableIndex)] * kernels::dudx[order][l][n];
+                }
+            }
+          }
+        }
+        return;
+      }
+} // computeGradQi
+
+/**
+ * Read off values from SolverTypes, for convenience.
+ **/
+template <typename SolverType>
+void computeGradQ(double* gradQ, const double* const u, const tarch::la::Vector<DIMENSIONS, double>& sizeOfPatch) {
+	const int numberOfVariables = SolverType::NumberOfVariables;
+	const int order = SolverType::Order;
+	computeGradQ(gradQ, u, sizeOfPatch, numberOfVariables, order);
+}
+
+/// Convenience also for computeGradQi
+template <typename SolverType>
+void computeGradQi(double* gradQi, const double* const u, const int requestedDirection, const int requestedVariableIndex, const tarch::la::Vector<DIMENSIONS, double>& sizeOfPatch) {
+	const int numberOfVariables = SolverType::NumberOfVariables;
+	const int order = SolverType::Order;
+	computeGradQi(gradQi, u, requestedDirection, requestedVariableIndex, sizeOfPatch, numberOfVariables, order);
+}
+
+
+} // c
+} // generic
+} // aderdg
+} // kernels
+
+#endif

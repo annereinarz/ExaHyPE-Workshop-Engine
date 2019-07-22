@@ -1,0 +1,79 @@
+{# /**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/ #}
+
+#include "{{pathToOptKernel}}/Kernels.h"
+#include "{{pathToOptKernel}}/DGMatrices.h"
+#include "{{pathToOptKernel}}/Quadrature.h"
+
+
+void {{codeNamespace}}::surfaceIntegral( 
+  double* restrict lduh, 
+  const double* restrict const lFhbnd, 
+  const double inverseDx //Assume dx[0] == dx[1] == dx[2]
+) {
+
+#ifdef __INTEL_COMPILER
+  __assume_aligned(FRCoeff,  ALIGNMENT);
+  __assume_aligned(FLCoeff,  ALIGNMENT);
+  __assume_aligned(weights2, ALIGNMENT);
+  __assume_aligned(lFhbnd,   ALIGNMENT);
+  __assume_aligned(lduh,     ALIGNMENT);
+#endif
+
+  // x faces
+  for (int yz = 0; yz < {{nDof*nDof3D}}; yz++) {
+    const double weight = weights2[yz] * inverseDx; //Assume dx[0] == dx[1] == dx[2]
+    for (int x = 0; x < {{nDof}}; x++) {
+      #pragma omp simd aligned(lduh,lFhbnd:ALIGNMENT)
+      for (int n = 0; n < {{nVarPad}}; n++) {
+        lduh[n+{{nVarPad}}*(x+{{nDof}}*yz)] -= weight *
+            (lFhbnd[n+{{nVarPad}}*yz+{{bndFaceSize*1}}] * FRCoeff[x] {{'+' if isLinear else '-'}} {# only diff between linear and nonlinear #}
+             lFhbnd[n+{{nVarPad}}*yz+{{bndFaceSize*0}}] * FLCoeff[x]);
+      }
+    }
+  }
+
+  // y faces
+  for (int xz = 0; xz < {{nDof*nDof3D}}; xz++) {
+    const double weight = weights2[xz] * inverseDx; //Assume dx[0] == dx[1] == dx[2]
+{% if nDim == 3 %}{# // xz in [0..nDof*nDof-1], need to extract x and z to compute the correct shift for luh #}
+    const int xzLuhIndex = ((xz/{{nDof}})*{{nDof*nDof}} + xz % {{nDof}}) *{{nVarPad}};
+{% else %}
+    const int xzLuhIndex = xz*{{nVarPad}};
+{% endif %}
+    for (int y = 0; y < {{nDof}}; y++) {
+      #pragma omp simd aligned(lduh,lFhbnd:ALIGNMENT)
+      for (int n = 0; n < {{nVarPad}}; n++) {
+        lduh[n+xzLuhIndex+y*{{nDof*nVarPad}}] -= weight *
+            (lFhbnd[n+{{nVarPad}}*xz+{{bndFaceSize*3}}] * FRCoeff[y] {{'+' if isLinear else '-'}}
+             lFhbnd[n+{{nVarPad}}*xz+{{bndFaceSize*2}}] * FLCoeff[y]);
+        }
+      }
+  }
+{% if nDim == 3 %}
+
+  // z faces
+  for (int xy = 0; xy < {{nDof*nDof}}; xy++) {
+    const double weight = weights2[xy] * inverseDx; //Assume dx[0] == dx[1] == dx[2]
+    for (int z = 0; z < {{nDof}}; z++) {
+      #pragma omp simd aligned(lduh,lFhbnd:ALIGNMENT)
+      for (int n = 0; n < {{nVarPad}}; n++) {
+        lduh[n+{{nVarPad}}*(xy+{{nDof*nDof}}*z)] -= weight *
+            (lFhbnd[n+{{nVarPad}}*xy+{{bndFaceSize*5}}] * FRCoeff[z] {{'+' if isLinear else '-'}}
+             lFhbnd[n+{{nVarPad}}*xy+{{bndFaceSize*4}}] * FLCoeff[z]);
+      }
+    }
+  }
+{% endif %}
+}
+

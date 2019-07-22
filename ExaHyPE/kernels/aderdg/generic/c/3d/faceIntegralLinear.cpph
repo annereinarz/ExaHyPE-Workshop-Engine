@@ -1,0 +1,107 @@
+#include <tarch/la/Vector.h>
+
+#include "../../../../KernelUtils.h"
+#include "kernels/aderdg/generic/Kernels.h"
+
+#if DIMENSIONS == 3
+
+template <int numberOfVariables, int basisSize>
+void kernels::aderdg::generic::c::faceIntegralLinear(double* const lduh, const double *const lFhbnd,
+                 const int direction, const int orientation,
+                 const tarch::la::Vector<DIMENSIONS, double>& dx) { 
+  const double scaling = 1.0/dx[direction];
+
+  constexpr int order = basisSize -1;
+
+  idx4 idx_lduh(basisSize, basisSize, basisSize, numberOfVariables); // (z,y,x,var/par)
+  idx3 idx_lFhbnd(basisSize, basisSize, numberOfVariables);
+  // idx4 idx_lFhbnd(basisSize,basisSize, basisSize, numberOfVariables); // when we add time later
+
+  if( direction == 0 ){   // x-face
+    for (int i = 0; i < basisSize; i++) { // z
+      for (int j = 0; j < basisSize; j++) { // y
+
+      	#if defined(_GLL)
+           const double scaledWeight = kernels::gaussLobattoWeights[order][i] *
+                                 kernels::gaussLobattoWeights[order][j]*scaling;
+       #else
+           const double scaledWeight = kernels::gaussLegendreWeights[order][i] *
+                                 kernels::gaussLegendreWeights[order][j]*scaling;
+
+       #endif
+       
+        //const double scaledWeight = 
+        //     kernels::gaussLegendreWeights[order][i] *
+        //     kernels::gaussLegendreWeights[order][j] *
+        //     scaling;
+
+        for (int k = 0; k < basisSize; k++) { // x
+          for (int l = 0; l < numberOfVariables; l++) {
+            lduh[idx_lduh(i, j, k, l)] -= 
+                scaledWeight *
+                kernels::FCoeff[order][orientation][k] *
+                lFhbnd[idx_lFhbnd(i, j, l)];
+          }
+        }
+      }
+    }
+  } else if( direction == 1 ){ // y-face
+    for (int i = 0; i < basisSize; i++) { // z
+      for (int j = 0; j < basisSize; j++) { // y
+        for (int k = 0; k < basisSize; k++) { // x
+
+	#if defined(_GLL)
+           const double scaledWeight = kernels::gaussLobattoWeights[order][i] *
+                                 kernels::gaussLobattoWeights[order][k]*scaling;
+       #else
+           const double scaledWeight = kernels::gaussLegendreWeights[order][i] *
+                                 kernels::gaussLegendreWeights[order][k]*scaling;
+
+       #endif
+       
+          //const double scaledWeight = 
+          //     kernels::gaussLegendreWeights[order][i] *
+          //     kernels::gaussLegendreWeights[order][k] *
+          //     scaling;
+
+          for (int l = 0; l < numberOfVariables; l++) {
+            lduh[idx_lduh(i, j, k, l)] -=
+                scaledWeight * 
+                kernels::FCoeff[order][orientation][j] *
+                lFhbnd[idx_lFhbnd(i, k, l)];  
+          }
+        }
+      }
+    }
+  } else if ( direction == 2 ){ //z-face
+    for (int i = 0; i < basisSize; i++) { // z 
+      for (int j = 0; j < basisSize; j++) { // y
+        for (int k = 0; k < basisSize; k++) { // x
+
+	#if defined(_GLL)
+           const double scaledWeight = kernels::gaussLobattoWeights[order][j] *
+                                 kernels::gaussLobattoWeights[order][k]*scaling;
+       #else
+           const double scaledWeight = kernels::gaussLegendreWeights[order][j] *
+                                 kernels::gaussLegendreWeights[order][k]*scaling;
+
+       #endif
+       
+          //    const double scaledWeight = 
+          //     kernels::gaussLegendreWeights[order][j] *
+          //     kernels::gaussLegendreWeights[order][k] *
+          //     scaling;
+
+          for (int l = 0; l < numberOfVariables; l++) {
+              lduh[idx_lduh(i, j, k, l)] -=
+                  scaledWeight * 
+                  kernels::FCoeff[order][orientation][i] *
+                  lFhbnd[idx_lFhbnd(j, k, l)]; 
+          }
+        }
+      }
+    }
+  }
+}
+
+#endif

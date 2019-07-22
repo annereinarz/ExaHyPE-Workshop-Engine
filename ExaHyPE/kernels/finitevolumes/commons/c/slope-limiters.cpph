@@ -1,0 +1,84 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ *
+ * @authors: Sven Koeppel
+ **/
+
+// When adding new flux/slope limiters, here is what you need to do:
+//  1) Choose a saying name (for instance "sweby")
+//  2) Add the function declaration to slope-limiters.h
+//  3) Add the implementation to this file
+//  4) Add the option to the exahype-specfile.schema.json
+// Done! Now it can be used straight from the specification file
+
+inline double kernels::finitevolumes::commons::c::minmod(double a, double b) {
+  //assert(std::isfinite(a)); // make sure to use peano assertions here
+  //assert(std::isfinite(b));
+
+  if (a * b < 0.0) {  // sign is different (alternative: std::signbit and xor)
+    return 0.0;
+  } else {
+    if (std::abs(a) < std::abs(b)) {
+      return a;
+    } else {
+      return b;
+    }
+  }
+}
+
+inline double kernels::finitevolumes::commons::c::koren(double a, double b) {
+  // c.f. commit bc9063c5 and comments at Gitlab
+
+  if(std::abs(b) < 1.e-12) { 
+    return 0.0;
+  } else {
+    double r=a/b;
+    double phi=std::max(0.0, std::min(2.0*r , std::min((1.+2.*r)/3.,2.0)));
+    return phi*b;
+  }
+}
+
+
+inline double kernels::finitevolumes::commons::c::superbee(double a, double b) {
+
+  if(std::abs(b) < 1.e-12) { 
+    return 0.0;
+  } else {
+    double r=a/b;
+    double phi=std::max(0.0, std::max(std::min(2.0*r ,1.), std::min(r,2.0)));
+    return phi*b;
+  }
+}
+
+inline double kernels::finitevolumes::commons::c::vanalbada(double a, double b) {
+
+  if(std::abs(b) < 1.e-12) { 
+    return 0.0;
+  } else {
+    double r=a/b;
+    double phi=(r*r+r)/(r*r+1.);
+    return phi*b;
+  }
+}
+
+inline double kernels::finitevolumes::commons::c::mclim(double a, double b) {
+
+  if(std::abs(b) < 1.e-12) { 
+    return 0.0;
+  } else {
+    double r=a/b;
+    double temp=std::min(2.0*r ,0.5*(1+r));
+
+    double phi=std::max( 0.0, std::min(temp,2.0));
+    return phi*b;
+  }
+}

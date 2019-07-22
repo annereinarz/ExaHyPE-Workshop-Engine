@@ -1,0 +1,81 @@
+\section{Single core optimisation}
+
+\chapterDescription
+  {
+    5 minutes.
+  }
+  {
+  }
+
+
+In this section, we discuss various aspects tied to alignment and vectorisation. 
+
+
+\subsection{Vectorisation of basic linear algebra}
+
+Peano does come along with its own small technical architecture (\texttt{tarch})
+that holds some basic linear algebra routines. These routines currently are
+vectorised via Intel's SIMD pragmas. The pragmas are active if and only if the
+define \texttt{CompilerICC} is set. 
+
+All linear algebra routines (and various other parts of the code) include the
+file \linebreak
+\texttt{tarch/compiler/CompilerSpecificSettings.h}.
+This header evaluates various compiler predefines and tries to identify on which
+machine you compile.
+It then includes a compiler-specific include file which sets flags alike 
+\texttt{CompilerICC} if an Intel compiler is found.
+
+For cross-compilation or tuning of your settings, it might be reasonable to
+either adopt the spec file or to write your own header file which
+defines/undefines certain compiler settings.
+
+
+\subsection{Alignment of heap data}
+
+Most codes managing larger double arrays within Peano use Peano's heap to do so. 
+By default, the heap relies on the \texttt{std::vector} class and its embedded 
+plain C++ array. 
+By default, heap data is not aligned.
+
+
+For the heaps hosting doubles, Peano however offers aligned variants. See the
+file \linebreak
+\texttt{peano/heap/DoubleHeap.h} for examples. 
+There are a few predefined (typedefs) heaps, but you might want to define your
+own.
+
+
+Once you use the aligned heaps for your \texttt{double} data, its interface
+provides you access to standard C++ \texttt{std::vector<double>} objects.
+These objects have a \texttt{data()} operation through which you can get a 
+pointer to an aligned double array.
+
+\begin{code}
+typedef peano::heap::RLEDoubleHeapAlignment64  MyDoubleHeap;
+
+double* x = MyDoubleHeap::getInstance().getData(myIndex).data();
+
+// x is now aligned to 64 bytes.
+\end{code}
+
+
+% Alle Optionen von PeanoOptimisations.h durchgehen
+%
+%
+
+%Become topology-aware
+
+
+% Throughout the bottom-up traversal, each mpi traversal first receives data from 
+% all its children, i.e. data deployed to remote traversals, and afterward sends 
+% data to its master in turn. Unfortunately, Peano has to do quite some 
+% algorithmic work after the last children record has been received if and only 
+% if some subtrees are also to be traversed locally. It hence might make sense to
+% introduce pure administrative ranks that do not take over any computation on the finest grid level. 
+% Again, we do a brief 1d toy case study:
+% 
+% foobar
+% 
+% In the upper case, the blue rank triggers the red one to traverse its subtree. The red one in turn tiggers 3 and 4. Afterward, it continues with 2 and then waits for 3 and 4 to finish. After the records from 3 and 4 have been received, it has to send its data to 0 to allow 0 to terminate the global traversal. However, between the last receive and the send, some administrative work has to be done, as the red node also holds local work (it has to run through the embedding cells to get the ordering of the boundary data exchange right, but that's irrelevant from a user point of view). This way, we've introduced an algorithmic latency: Some time elaps between 3 and 4 sending their data and the red one continuing with the data flow up the tree. This latency becomes severe for deep Splittings.
+

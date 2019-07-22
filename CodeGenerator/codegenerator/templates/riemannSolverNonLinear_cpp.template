@@ -1,0 +1,159 @@
+{# /**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/ #}
+{% import 'subtemplates/macros.template' as m with context %}{# get template macros #}
+
+#include <algorithm>
+#include <cstring>
+#include <cmath>
+
+#include "{{pathToOptKernel}}/Kernels.h"
+#include "{{pathToOptKernel}}/DGMatrices.h"
+#include "{{pathToOptKernel}}/Quadrature.h"
+
+#include "{{solverHeader}}"
+
+void {{codeNamespace}}::riemannSolver( 
+  {{solverName}}& solver,
+  double* restrict FL, double* restrict FR,
+  const double* restrict const QL, const double* restrict const QR,
+  const double t,
+  const double dt,
+  const int direction
+{% if useDeepProfiler %}
+  , exahype::profilers::Profiler* profiler
+{% endif %}
+) {
+
+#ifdef __INTEL_COMPILER
+  __assume_aligned(weights2, ALIGNMENT);
+  __assume_aligned(FL, ALIGNMENT);
+  __assume_aligned(FR, ALIGNMENT);
+  __assume_aligned(QL, ALIGNMENT);
+  __assume_aligned(QR, ALIGNMENT);
+#endif
+
+  {{m.allocateArray('tmp_bnd', nVarPad*nDof*nDof3D) | indent(2)}}{##}
+  double QavL[{{nDataPad}}] __attribute__((aligned(ALIGNMENT))) = {0.0};
+  double QavR[{{nDataPad}}] __attribute__((aligned(ALIGNMENT))) = {0.0};
+  
+  for (int xy = 0; xy < {{nDof*nDof3D}}; xy++) { //xy = 1 or 2 spatial dim (1 in 2D, 2 in 3D)
+    #pragma omp simd aligned(QavL,QavR,QL,QR:ALIGNMENT)
+    for (int n = 0; n < {{nDataPad}}; n++) {
+      QavL[n] += weights2[xy] * QL[xy*{{nDataPad}}+n];
+      QavR[n] += weights2[xy] * QR[xy*{{nDataPad}}+n];
+    }
+  }
+  
+  double lambdaL[{{nVarPad}}] __attribute__((aligned(ALIGNMENT)));
+#ifdef USE_IPO
+  #pragma forceinline recursive
+#endif
+  solver.{{solverName}}::eigenvalues(&QavL[0], direction, &lambdaL[0]);
+  double lambdaR[{{nVarPad}}] __attribute__((aligned(ALIGNMENT)));
+#ifdef USE_IPO
+  #pragma forceinline recursive
+#endif
+  solver.{{solverName}}::eigenvalues(&QavR[0], direction, &lambdaR[0]);
+  
+  double smax = 0.;
+  for (int ivar = 0; ivar < {{nVar}}; ivar++) {
+    smax = std::max(smax, std::max(fabs(lambdaL[ivar]), fabs(lambdaR[ivar])));
+  }
+  
+  for (int xy = 0; xy < {{nDof*nDof3D}}; xy++){
+    #pragma omp simd aligned(tmp_bnd,QL,QR:ALIGNMENT)
+    for (int n = 0; n < {{nVar}}; n++) { //skip parameters
+      tmp_bnd[xy*{{nVarPad}}+n] = smax * (QL[xy*{{nVarPad}}+n]-QR[xy*{{nVarPad}}+n]);
+    }
+  }
+  
+  #pragma omp simd aligned(FL,FR,tmp_bnd:ALIGNMENT)
+  for (int xyn = 0; xyn < {{nVarPad*nDof*nDof3D}}; xyn++) {
+    FL[xyn] = 0.5 * (FL[xyn] + FR[xyn] + tmp_bnd[xyn]);
+  }
+  std::copy_n(FL, {{nVarPad*nDof*nDof3D}}, FR);
+  {{m.freeArray("tmp_bnd")}}{##}
+  
+{% if useNCP %}
+  //add non-conservative product part
+
+{% if useNCPVect %}
+  {{m.vectPDEsArrays('Qavgt', nData, False) | indent(2)}}{##}
+  {{m.vectPDEsArrays('gradQt', nVar, True) | indent(2)}}{##}
+  {{m.vectPDEsArrays('ncpt', nVar, False) | indent(2)}}{##}
+  for (int xy = 0; xy < {{(nDof*nDof3D)-((nDof*nDof3D)%vectSize)}}; xy+={{vectSize}}) {
+    for (int n = 0; n < {{nVar}}; n++) {
+      for (int s = 0; s < {{vectSize}}; s++) {
+        Qavgt_block[n*{{vectSize}}+s] = 0.5 * (QL[(xy+s)*{{nDataPad}}+n] + QR[(xy+s)*{{nDataPad}}+n]);
+        gradQt[direction][n][s] = QR[(xy+s)*{{nDataPad}}+n] - QL[(xy+s)*{{nDataPad}}+n];
+      }
+    }
+#ifdef USE_IPO
+    #pragma forceinline recursive
+#endif
+    solver.{{solverName}}::nonConservativeProduct_vect(Qavgt, gradQt, ncpt, {{vectSize}});
+    for (int s = 0; s < {{vectSize}}; s++) {
+      for (int n = 0; n < {{nVar}}; n++) {
+        FR[(xy+s)*{{nVarPad}}+n] -= 0.5*ncpt[n][s];
+        FL[(xy+s)*{{nVarPad}}+n] += 0.5*ncpt[n][s];
+      }
+    }
+  }
+{% if (nDof*nDof3D)%vectSize != 0 %}{# compute rest #}
+  {
+    for (int n = 0; n < {{nVar}}; n++) {
+      for (int s = 0; s < {{(nDof*nDof3D)%vectSize}}; s++) {
+        Qavgt_block[n*{{vectSize}}+s] = 0.5 * (QL[({{(nDof*nDof3D)-((nDof*nDof3D)%vectSize)}}+s)*{{nDataPad}}+n] + QR[({{(nDof*nDof3D)-((nDof*nDof3D)%vectSize)}}+s)*{{nDataPad}}+n]);
+        gradQt[direction][n][s] = QR[({{(nDof*nDof3D)-((nDof*nDof3D)%vectSize)}}+s)*{{nDataPad}}+n] - QL[({{(nDof*nDof3D)-((nDof*nDof3D)%vectSize)}}+s)*{{nDataPad}}+n];
+      }
+      for (int s = {{(nDof*nDof3D)%vectSize}}; s < {{vectSize}};s++) { // fill missing points with valid values
+        Qavgt_block[n*{{vectSize}}+s] = Qavgt_block[n*{{vectSize}}];
+        gradQt[direction][n][s] = gradQt[direction][n][0];
+      }
+    }
+#ifdef USE_IPO
+    #pragma forceinline recursive
+#endif
+    solver.{{solverName}}::nonConservativeProduct_vect(Qavgt, gradQt, ncpt, {{(nDof*nDof3D)%vectSize}});
+    for (int s = 0; s < {{(nDof*nDof3D)%vectSize}}; s++) {
+      for (int n = 0; n < {{nVar}}; n++) {
+        FR[({{(nDof*nDof3D)-((nDof*nDof3D)%vectSize)}}+s)*{{nVarPad}}+n] -= 0.5*ncpt[n][s];
+        FL[({{(nDof*nDof3D)-((nDof*nDof3D)%vectSize)}}+s)*{{nVarPad}}+n] += 0.5*ncpt[n][s];
+      }
+    }
+  }
+{% endif %}{# rest#}
+{% else %}
+  double Qavg[{{nData}}] __attribute__((aligned(ALIGNMENT))) = {0.0};
+  double gradQ[{{nDim*nVar}}] __attribute__((aligned(ALIGNMENT))) = {0.0};
+  double ncp[{{nVarPad}}] __attribute__((aligned(ALIGNMENT))) = {0.0};
+  for (int xy = 0; xy < {{nDof*nDof3D}}; xy++) {
+    #pragma omp simd aligned(Qavg,QL,QR,gradQ:ALIGNMENT)
+    for (int n = 0; n < {{nVar}}; n++) {
+       Qavg[n] = 0.5 * (QL[xy*{{nDataPad}}+n] + QR[xy*{{nDataPad}}+n]);
+       gradQ[direction*{{nVar}}+n] = QR[xy*{{nDataPad}}+n] - QL[xy*{{nDataPad}}+n];
+    }
+#ifdef USE_IPO
+    #pragma forceinline recursive
+#endif
+    solver.{{solverName}}::nonConservativeProduct(Qavg, gradQ, ncp);
+    #pragma omp simd aligned(FL,FR,ncp:ALIGNMENT)
+    for (int n = 0; n < {{nVarPad}}; n++) {
+      FR[xy*{{nVarPad}}+n] -= 0.5*ncp[n];
+      FL[xy*{{nVarPad}}+n] += 0.5*ncp[n];
+    }
+  }
+{% endif %}{# useNCPVect #}
+{% endif %}
+
+}

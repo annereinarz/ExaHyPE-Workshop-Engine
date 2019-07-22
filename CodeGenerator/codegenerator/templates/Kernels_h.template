@@ -1,0 +1,288 @@
+{# /**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/ #}
+
+#ifndef _EXAHYPE_{{guardNamespace}}_KERNELS_H_
+#define _EXAHYPE_{{guardNamespace}}_KERNELS_H_
+
+#ifndef __INTEL_COMPILER
+#include <mm_malloc.h>
+#endif
+#include <vector>
+
+//forward declaration of the user solver
+namespace {{solverNamespace}} {
+  class {{solverClass}};
+}
+
+{% if useLimiter %}
+//forward declaration of the ADERDGSolver for limiter functions
+namespace exahype {
+namespace solvers {
+ class ADERDGSolver;
+}
+}
+{% endif %}
+
+
+#define NDEBUG
+{% for namespaceName in codeNamespaceList %}
+namespace {{namespaceName}} {
+{% endfor %}
+{% if isLinear %}
+  int fusedSpaceTimePredictorVolumeIntegral(
+    {{solverName}}& solver,
+    double* restrict lduh,
+    double* restrict lQhbnd,
+    double* restrict lFhbnd,
+{% if useSplitCKScalar or useSplitCKVect %}
+    double* restrict lQi,
+    double* restrict lQiNext,
+    double* restrict lPi,   // for NCP or Source
+    double* restrict lQhi,
+    double* restrict lFhi,
+    double* restrict gradQ, // for NCP or Source
+    double* restrict PSi,   // for pointSource
+{% else %}
+    double* restrict lQi,
+    double* restrict lFi,
+    double* restrict lSi,   // for NCP or Source
+    double* restrict lQhi,
+    double* restrict lFhi,
+    double* restrict lShi,  // for NCP or Source
+    double* restrict gradQ, // for NCP or Source
+    double* restrict PSi,   // for pointSource
+    double* restrict PSderivatives, // for pointSource
+{% endif %}
+    const double* const restrict luh,
+    const double* const center,
+    const double dx, // Assume dx[0] == dx[1] == dx[2]
+    const double tStep, // == t
+    const double dt,
+    std::vector<int>* pointSources // will be deleted in the end if set
+  );
+{% if usePointSources %}
+  int fusedSpaceTimePredictorVolumeIntegral_WithoutPS(
+    {{solverName}}& solver,
+    double* restrict lduh,
+    double* restrict lQhbnd,
+    double* restrict lFhbnd,
+{% if useSplitCKScalar or useSplitCKVect %}
+    double* restrict lQi,
+    double* restrict lQiNext,
+    double* restrict lPi,   // for NCP or Source
+    double* restrict lQhi,
+    double* restrict lFhi,
+    double* restrict gradQ, // for NCP or Source
+    double* restrict PSi,   // for pointSource
+{% else %}
+    double* restrict lQi,
+    double* restrict lFi,
+    double* restrict lSi,   // for NCP or Source
+    double* restrict lQhi,
+    double* restrict lFhi,
+    double* restrict lShi,  // for NCP or Source
+    double* restrict gradQ, // for NCP or Source
+    double* restrict PSi,   // for pointSource
+    double* restrict PSderivatives, // for pointSource
+{% endif %}
+    const double* const restrict luh,
+    const double* const center,
+    const double dx, // Assume dx[0] == dx[1] == dx[2]
+    const double tStep, // == t
+    const double dt,
+    std::vector<int>* pointSources // will be deleted in the end if set
+  );
+{% endif %}{# usePointSources #}
+{% else %}{# isLinear #}
+  int fusedSpaceTimePredictorVolumeIntegral(
+    {{solverName}}& solver,
+    double* restrict lduh,
+    double* restrict lQhbnd,
+    double* restrict lFhbnd,
+    double* restrict lQi,
+    double* restrict rhs,
+    double* restrict lFi,
+    double* restrict lSi,   // for NCP or Source
+    double* restrict lQhi,
+    double* restrict lFhi,
+    double* restrict lShi,  // for NCP or Source
+    double* restrict gradQ, // for NCP or Source
+    const double* const restrict luh,
+    const double inverseDx, //Assume dx[0] == dx[1] == dx[2]
+    const double dt
+  );
+{% endif %}
+
+  void solutionUpdate( 
+    double* restrict luh,
+    const double* restrict const luhOld, 
+    const double* restrict const lduh, 
+    const double dt
+  );
+  
+  void surfaceIntegral( 
+    double* restrict lduh, 
+    const double* restrict const lFhbnd, 
+    const double inverseDx //Assume dx[0] == dx[1] == dx[2]
+  );
+  
+  void faceIntegral(
+    double *lduh, 
+    const double *const lFhbnd,
+    const int direction, 
+    const int orientation,
+    const double inverseDxDirection
+  );
+
+  void solutionAdjustment(
+    {{solverName}}& solver,
+    double* luh,
+    const double* const center,
+    const double dx, //Assume dx[0] == dx[1] == dx[2]
+    const double t,
+    const double dt
+  );
+
+  void riemannSolver( 
+    {{solverName}}& solver,
+    double* restrict FL,
+    double* restrict FR,
+    const double* restrict const QL,
+    const double* restrict const QR,
+    const double t,
+    const double dt,
+    const int direction
+  );
+
+  double stableTimeStepSize(
+    {{solverName}}& solver,
+    const double* restrict const luh,
+    const double inverseDx //Assume dx[0] == dx[1] == dx[2]
+  );
+
+  void boundaryConditions(
+    {{solverName}}& solver,
+    double* fluxOut, 
+    double* stateOut, 
+    const double* const fluxIn, 
+    const double* const stateIn, 
+    const double* const cellCentre, 
+    const double* const cellSize, 
+    const double t,const double dt, 
+    const int faceIndex, 
+    const int normalNonZero 
+  );
+
+{% if usePointSources %}
+  std::vector<int>* getPointSources(
+    {{solverName}}& solver,
+    const double* const center,
+    const double dx //Assume dx[0] == dx[1] == dx[2]
+  );
+{% endif %}
+  
+//AMR Routines
+//------------
+
+  void faceUnknownsProlongation(
+    double* restrict lQhbndFine,
+    double* restrict lFhbndFine,
+    const double* const restrict lQhbndCoarse,
+    const double* const restrict lFhbndCoarse,
+    const int coarseGridLevel,
+    const int fineGridLevel,
+    const int* const subfaceIndex
+  );
+  
+  // used by faceIntegral, only restrict the flux on the face
+  void faceFluxRestriction(
+    double* restrict lFhbndCoarse,
+    const double* const restrict lFhbndFine,
+    const int* const subfaceIndex,
+    const int levelDelta
+  );
+
+  void volumeUnknownsProlongation(
+    double* restrict luhFine,
+    const double* const restrict luhCoarse,
+    const int coarseGridLevel,
+    const int fineGridLevel,
+    const int* const subcellIndex
+  );
+  
+  void volumeUnknownsRestriction(
+    double* restrict luhCoarse,
+    const double* const restrict luhFine,
+    const int coarseGridLevel,
+    const int fineGridLevel,
+    const int* const subcellIndex
+  );
+
+{% if useLimiter %}
+//Limiter
+//-------
+
+  void projectOnFVLimiterSpace(const double* const luh, double* const lim);
+
+  void projectOnDGSpace(const double* const lim, double* const luh);
+
+  void findCellLocalMinAndMax(
+    const double* const luh,
+    const exahype::solvers::ADERDGSolver* solver,
+    double* const localMinPerVariables, 
+    double* const localMaxPerVariable
+  );
+
+  void findCellLocalLimiterMinAndMax(
+    const double* const lim,
+    const exahype::solvers::ADERDGSolver* solver,
+    double* const localMinPerObservable, 
+    double* const localMaxPerObservable
+  );
+
+  bool discreteMaximumPrincipleAndMinAndMaxSearch(
+    const double* const luh,
+    const exahype::solvers::ADERDGSolver* solver,
+    const double relaxationParameter,
+    const double differenceScaling,
+    double* boundaryMinPerVariables, 
+    double* boundaryMaxPerVariables
+  );
+
+  //private
+  void compareWithADERDGSolutionAtGaussLobattoNodes(
+    const double* const luh,
+    const exahype::solvers::ADERDGSolver* solver,
+    double* min, 
+    double* max
+  );
+
+  //private
+  void compareWithADERDGSolutionAtFVSubcellCenters(
+    const double* const luh,
+    const exahype::solvers::ADERDGSolver* solver,
+    double* min, 
+    double* max
+  );
+{% endif %}
+  
+{% for namespaceName in codeNamespaceList %}
+}
+{% endfor %}
+
+#include "{{pathToOptKernel}}/ConfigurationParameters.cpph"
+{% if useVectPDEs %}
+#include "{{pathToOptKernel}}/matrixUtils.cpph"
+{% endif %}
+
+#endif // _EXAHYPE_{{guardNamespace}}_KERNELS_H_

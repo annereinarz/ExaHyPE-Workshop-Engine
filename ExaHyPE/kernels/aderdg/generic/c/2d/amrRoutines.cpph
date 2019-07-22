@@ -1,0 +1,514 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon 
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/
+#include "tarch/la/Scalar.h"
+#include "tarch/la/ScalarOperations.h"
+
+#include "kernels/GaussLegendreQuadrature.h"
+#include "kernels/DGMatrices.h"
+#include "kernels/KernelUtils.h"
+
+#include "string.h"
+
+#if DIMENSIONS == 2
+template <int numberOfVariables,int basisSize>
+void singleLevelFaceUnknownsProlongation(
+    double* lQhbndFine,
+    const double* lQhbndCoarse,
+    const tarch::la::Vector<DIMENSIONS-1, int>& subfaceIndex) {
+  kernels::idx2 idx(basisSize,numberOfVariables);
+
+  for (int m1 = 0; m1 < basisSize; ++m1) {
+    for (int ivar = 0; ivar < numberOfVariables; ++ivar) {
+      for (int n1 = 0; n1 < basisSize; ++n1) {
+        lQhbndFine[idx(m1,ivar)] +=
+            lQhbndCoarse[idx(n1,ivar)] *
+            kernels::fineGridProjector1d[basisSize-1][subfaceIndex[0]][n1][m1];
+      }
+    }
+  }
+}
+
+template <int numberOfVariables,int numberOfParameters,int basisSize>
+void kernels::aderdg::generic::c::faceUnknownsProlongation(
+                              double* lQhbndFine,
+                              double* lFhbndFine,
+                              const double* lQhbndCoarse,
+                              const double* lFhbndCoarse,
+                              const int coarseGridLevel,
+                              const int fineGridLevel,
+                              const tarch::la::Vector<DIMENSIONS-1, int>& subfaceIndex){
+  constexpr int numberOfData = numberOfVariables+numberOfParameters;
+
+  const int levelDelta = fineGridLevel - coarseGridLevel;
+
+  double lQhbndFineTemp[basisSize*numberOfData];
+  double lFhbndFineTemp[basisSize*numberOfVariables];
+
+  double * pointerQhbnd1 = 0;
+  double * pointerFhbnd1 = 0;
+
+  double * pointerQhbnd2 = 0;
+  double * pointerFhbnd2 = 0;
+
+  // This ensures that the pointerQhbnd1 
+  // of the last iteration points to lQhbndFine.
+  // The same is done for pointerFhbnd1.
+  if (levelDelta % 2 == 0) {
+    pointerQhbnd1 = lQhbndFineTemp;
+    pointerFhbnd1 = lFhbndFineTemp;
+  } else {
+    pointerQhbnd1 = lQhbndFine;
+    pointerFhbnd1 = lFhbndFine;
+  }
+
+  tarch::la::Vector<DIMENSIONS-1,int> subfaceIndexPrevious (subfaceIndex);
+  tarch::la::Vector<DIMENSIONS-1,int> subfaceIndexCurrent;
+
+  tarch::la::Vector<DIMENSIONS-1,int> subintervalIndex;
+  // This loop decodes subfaceIndex[0] into a tertiary basis
+  // starting with the highest significance 3^(levelDelta-1).
+  // 
+  // Per iteration, the digit corresponding to the current significance then determines
+  // the subinterval for the single level prolongation.
+  for (int l = 1; l < levelDelta+1; ++l) {
+    const int significance = tarch::la::aPowI(levelDelta-l,3);
+    subfaceIndexCurrent[0] = subfaceIndexPrevious[0] % significance;
+    subintervalIndex[0]    = (subfaceIndexPrevious[0] - subfaceIndexCurrent[0])/significance;
+    assertion(subintervalIndex[0] < 3);
+
+    // Zero the values of 'pointer1'.
+    std::fill_n(pointerQhbnd1, numberOfData*basisSize, 0.0);
+    std::fill_n(pointerFhbnd1, numberOfVariables*basisSize, 0.0);
+
+    // Apply the single level prolongation operator.
+    // 
+    // Use the coarse level unknowns in the first iteration
+    // and use the first pair of pointers 
+    // in the subsequent ones.
+    if (l==1) {
+      singleLevelFaceUnknownsProlongation<numberOfData,basisSize>(
+          pointerQhbnd1,
+          lQhbndCoarse,
+          subintervalIndex);
+
+      singleLevelFaceUnknownsProlongation<numberOfVariables,basisSize>(
+          pointerFhbnd1,
+          lFhbndCoarse,
+          subintervalIndex);
+    } else {
+      singleLevelFaceUnknownsProlongation<numberOfData,basisSize>(
+          pointerQhbnd1,
+          pointerQhbnd2,
+          subintervalIndex);
+
+      singleLevelFaceUnknownsProlongation<numberOfVariables,basisSize>(
+          pointerFhbnd1,
+          pointerFhbnd2,
+          subintervalIndex);
+    }
+
+    // Prepare next iteration.
+    subfaceIndexPrevious = subfaceIndexCurrent;
+
+    pointerQhbnd2 = pointerQhbnd1;
+    pointerFhbnd2 = pointerFhbnd1;
+
+    // Toggle the addresses of the pointers.
+    if (pointerQhbnd1 == lQhbndFineTemp) {
+      pointerQhbnd1 = lQhbndFine;
+      pointerFhbnd1 = lFhbndFine;
+    } else {
+      pointerQhbnd1 = lQhbndFineTemp;
+      pointerFhbnd1 = lFhbndFineTemp;
+    }
+  }
+}
+
+template <int numberOfVariables,int basisSize>
+void singleLevelFaceUnknownsRestriction(
+    double* lQhbndCoarse,
+    const double* lQhbndFine,
+    const tarch::la::Vector<DIMENSIONS-1, int>& subfaceIndex) {
+  constexpr int order = basisSize-1;
+
+  kernels::idx2 idx(basisSize,numberOfVariables);
+
+  for (int m1 = 0; m1 < basisSize; ++m1) {
+    for (int ivar = 0; ivar < numberOfVariables; ++ivar) {
+      for (int n1 = 0; n1 < basisSize; ++n1) {
+        lQhbndCoarse[idx(m1,ivar)] +=
+            kernels::gaussLegendreWeights[order][n1] *
+            kernels::fineGridProjector1d[order][subfaceIndex[0]][m1][n1] *
+            lQhbndFine[idx(n1,ivar)] /
+            kernels::gaussLegendreWeights[order][m1] / 3.0;
+      }
+    }
+  }
+}
+
+template <int length>
+void accumulate( // TODO(Dominic): Use std:: equivalent
+    double * inOutArray,
+    const double * inArray) {
+  for (int i = 0; i < length; ++i) {
+    inOutArray[i] += inArray[i];
+  }
+}
+
+template <int numberOfVariables,int basisSize>
+void kernels::aderdg::generic::c::faceUnknownsRestriction(
+                             double* const       lFhbndCoarse,
+                             const double* const lFhbndFine,
+                             const tarch::la::Vector<DIMENSIONS-1, int>& subfaceIndex,
+                             const int levelDelta) {
+  double lFhbndCoarseTemp1[basisSize*numberOfVariables];
+  double lFhbndCoarseTemp2[basisSize*numberOfVariables];
+
+  double * pointerFhbnd1 = 0;
+  double * pointerFhbnd2 = 0;
+
+  pointerFhbnd1 = lFhbndCoarseTemp1;
+
+  tarch::la::Vector<DIMENSIONS-1,int> subfaceIndexCurrent(subfaceIndex);
+
+  tarch::la::Vector<DIMENSIONS-1,int> subintervalIndex;
+  
+  // This loop decodes subfaceIndex[0] into a tertiary basis
+  // starting with the lowest significance 3^0 (in contrast to the prolongation loop).
+  //
+  // Per iteration, the digit corresponding to the current significance then determines
+  // the subinterval for the single level restriction.
+  for (int l = 1; l < levelDelta+1; ++l) {
+    subintervalIndex[0]    = subfaceIndexCurrent[0] % 3;
+    subfaceIndexCurrent[0] = (subfaceIndexCurrent[0] - subintervalIndex[0])/3;
+    assertion(subintervalIndex[0] < 3);
+
+    // Zero the values of of the first pair of pointers.
+    std::fill_n(pointerFhbnd1,numberOfVariables*basisSize, 0.0);
+
+    // Apply the single level restriction operator.
+    // 
+    // In the first iteration use the fine level
+    // unknowns as input. In he subsequent ones
+    // use the second pair of pointers.
+    if (l==1) {
+      singleLevelFaceUnknownsRestriction<numberOfVariables,basisSize>(
+          pointerFhbnd1,
+          lFhbndFine,
+          subintervalIndex);
+    } else {
+      singleLevelFaceUnknownsRestriction<numberOfVariables,basisSize>(
+          pointerFhbnd1,
+          pointerFhbnd2,
+          subintervalIndex);
+    }
+
+    // Prepare next iteration.
+    pointerFhbnd2 = pointerFhbnd1;
+    // Toggle pointer pairs.
+    if (pointerFhbnd1 == lFhbndCoarseTemp1) {
+      pointerFhbnd1 = lFhbndCoarseTemp2;
+    } else {
+      pointerFhbnd1 = lFhbndCoarseTemp1;
+    }
+  }
+
+  std::copy_n(pointerFhbnd2,numberOfVariables*basisSize,lFhbndCoarse);
+}
+
+
+template <int numberOfVariables,int numberOfParameters,int basisSize>
+void kernels::aderdg::generic::c::faceUnknownsRestriction(
+                             double* lQhbndCoarse,
+                             double* lFhbndCoarse,
+                             const double* lQhbndFine,
+                             const double* lFhbndFine,
+                             const int coarseGridLevel,
+                             const int fineGridLevel,
+                             const tarch::la::Vector<DIMENSIONS-1, int>& subfaceIndex){
+  constexpr int numberOfData = numberOfVariables+numberOfParameters;
+
+  const int levelDelta = fineGridLevel - coarseGridLevel;
+
+  double lQhbndCoarseTemp1[basisSize*numberOfData];
+  double lFhbndCoarseTemp1[basisSize*numberOfVariables];
+  double lQhbndCoarseTemp2[basisSize*numberOfData];
+  double lFhbndCoarseTemp2[basisSize*numberOfVariables];
+
+  double * pointerQhbnd1 = 0;
+  double * pointerQhbnd2 = 0;
+  double * pointerFhbnd1 = 0;
+  double * pointerFhbnd2 = 0;
+
+  pointerQhbnd1 = lQhbndCoarseTemp1;
+  pointerFhbnd1 = lFhbndCoarseTemp1;
+
+  tarch::la::Vector<DIMENSIONS-1,int> subfaceIndexCurrent(subfaceIndex);
+
+  tarch::la::Vector<DIMENSIONS-1,int> subintervalIndex;
+
+  // This loop decodes subfaceIndex[0] into a tertiary basis
+  // starting with the lowest significance 3^0 (in contrast to the prolongation loop).
+  //
+  // Per iteration, the digit corresponding to the current significance then determines
+  // the subinterval for the single level restriction.
+  for (int l = 1; l < levelDelta+1; ++l) {
+    subintervalIndex[0]    = subfaceIndexCurrent[0] % 3;
+    subfaceIndexCurrent[0] = (subfaceIndexCurrent[0] - subintervalIndex[0])/3;
+    assertion(subintervalIndex[0] < 3);
+
+    // Zero the values of of the first pair of pointers.
+    std::fill_n(pointerQhbnd1,numberOfData     *basisSize, 0.0);
+    std::fill_n(pointerFhbnd1,numberOfVariables*basisSize, 0.0);
+
+    // Apply the single level restriction operator.
+    //
+    // In the first iteration use the fine level
+    // unknowns as input. In he subsequent ones
+    // use the second pair of pointers.
+    if (l==1) {
+      singleLevelFaceUnknownsRestriction<numberOfData,basisSize>(
+          pointerQhbnd1,
+          lQhbndFine,
+          subintervalIndex);
+
+      singleLevelFaceUnknownsRestriction<numberOfVariables,basisSize>(
+          pointerFhbnd1,
+          lFhbndFine,
+          subintervalIndex);
+    } else {
+      singleLevelFaceUnknownsRestriction<numberOfData,basisSize>(
+          pointerQhbnd1,
+          pointerQhbnd2,
+          subintervalIndex);
+
+      singleLevelFaceUnknownsRestriction<numberOfVariables,basisSize>(
+          pointerFhbnd1,
+          pointerFhbnd2,
+          subintervalIndex);
+    }
+
+    // Prepare next iteration.
+    pointerQhbnd2 = pointerQhbnd1;
+    pointerFhbnd2 = pointerFhbnd1;
+    // Toggle pointer pairs.
+    if (pointerQhbnd1 == lQhbndCoarseTemp1) {
+      pointerQhbnd1 = lQhbndCoarseTemp2;
+      pointerFhbnd1 = lFhbndCoarseTemp2;
+    } else {
+      pointerQhbnd1 = lQhbndCoarseTemp1;
+      pointerFhbnd1 = lFhbndCoarseTemp1;
+    }
+  }
+
+  // Add restricted fine level unknowns to coarse level unknowns.
+  accumulate<numberOfData     *basisSize>(lQhbndCoarse,pointerQhbnd2);
+  accumulate<numberOfVariables*basisSize>(lFhbndCoarse,pointerFhbnd2);
+}
+
+template <int numberOfVariables, int basisSize>
+void singleLevelVolumeUnknownsProlongation(
+    double* luhFine,
+    const double* luhCoarse,
+    const tarch::la::Vector<DIMENSIONS, int>& subcellIndex) {
+  constexpr int order = basisSize-1;
+
+  kernels::idx3 idx(basisSize,basisSize,numberOfVariables);
+
+  for (int m2 = 0; m2 < basisSize; ++m2) {
+    for (int m1 = 0; m1 < basisSize; ++m1) {
+      for (int ivar = 0; ivar < numberOfVariables; ivar++) {
+        for (int n2 = 0; n2 < basisSize; ++n2) {
+          for (int n1 = 0; n1 < basisSize; ++n1) {
+            luhFine[idx(m2,m1,ivar)] +=
+                luhCoarse[idx(n2,n1,ivar)] *
+                kernels::fineGridProjector1d[order][subcellIndex[0]][n1][m1] *
+                kernels::fineGridProjector1d[order][subcellIndex[1]][n2][m2];
+          }
+        }
+      }
+    }
+  }
+}
+
+template <int numberOfVariables,int numberOfParameters,int basisSize>
+void kernels::aderdg::generic::c::volumeUnknownsProlongation(double* luhFine,
+                                const double* luhCoarse,
+                                const int coarseGridLevel,
+                                const int fineGridLevel,
+                                const tarch::la::Vector<DIMENSIONS, int>& subcellIndex){
+  constexpr int numberOfData = numberOfVariables+numberOfParameters;
+  constexpr int basisSize2 = basisSize*basisSize;
+
+  const int levelDelta = fineGridLevel - coarseGridLevel;
+
+  double luhFineTemp[basisSize2*numberOfData];
+
+  double * pointerUh1 = 0;
+  double * pointerUh2 = 0;
+
+  // This ensures that the first pointer 
+  // points to luhFine in the last iteration
+  // of the following loop.
+  if (levelDelta % 2 == 0) {
+    pointerUh1 = luhFineTemp;
+  } else {
+    pointerUh1 = luhFine;
+  }
+
+  tarch::la::Vector<DIMENSIONS,int> subcellIndexPrevious (subcellIndex);
+  tarch::la::Vector<DIMENSIONS,int> subcellIndexCurrent;
+
+  tarch::la::Vector<DIMENSIONS,int> subintervalIndex;
+  // This loop step by step decodes the elements of subcellIndex into a tertiary basis
+  // starting with the highest significance 3^(levelDelta-1).
+  // 
+  // Per iteration, the digits corresponding to the current significances then determine
+  // the subinterval for the single level prolongation.
+  for (int l = 1; l < levelDelta+1; ++l) {
+    const int significance = tarch::la::aPowI(levelDelta-l,3);
+    subcellIndexCurrent[0] = subcellIndexPrevious[0] % significance;
+    subcellIndexCurrent[1] = subcellIndexPrevious[1] % significance;
+    subintervalIndex[0]    = (subcellIndexPrevious[0] - subcellIndexCurrent[0])/significance;
+    subintervalIndex[1]    = (subcellIndexPrevious[1] - subcellIndexCurrent[1])/significance;
+    assertion(subintervalIndex[0] < 3);
+    assertion(subintervalIndex[1] < 3);
+
+    // Zero the values of the first pointer.
+    std::fill_n(pointerUh1, basisSize*basisSize*numberOfData, 0.0);
+
+    // Apply the single level prolongation operator.
+    // Use the coarse level unknowns in the first iteration
+    // and use the first pointer in the subsequent ones.
+    if (l==1) {
+      singleLevelVolumeUnknownsProlongation<numberOfData,basisSize>(
+          pointerUh1,
+          luhCoarse,
+          subintervalIndex);
+    } else {
+      singleLevelVolumeUnknownsProlongation<numberOfData,basisSize>(
+          pointerUh1,
+          pointerUh2,
+          subintervalIndex);
+    }
+
+    // Prepare next iteration.
+    subcellIndexPrevious = subcellIndexCurrent;
+
+    pointerUh2 = pointerUh1;
+    
+    // Toggle the addresses of the pointers.
+    if (pointerUh1 == luhFineTemp) {
+      pointerUh1 = luhFine;
+    } else {
+      pointerUh1 = luhFineTemp;
+    }
+  }
+}
+
+template <int numberOfVariables, int basisSize>
+void singleLevelVolumeUnknownsRestriction(
+    double* luhCoarse,
+    const double* luhFine,
+    const tarch::la::Vector<DIMENSIONS, int>& subcellIndex) {
+  constexpr int order = basisSize-1;
+
+  kernels::idx3 idx(basisSize,basisSize,numberOfVariables);
+
+  for (int m2 = 0; m2 < basisSize; ++m2) {
+    for (int m1 = 0; m1 < basisSize; ++m1) {
+      for (int ivar = 0; ivar < numberOfVariables; ivar++) {
+        for (int n2 = 0; n2 < basisSize; ++n2) {
+          for (int n1 = 0; n1 < basisSize; ++n1) {
+            luhCoarse[idx(m2,m1,ivar)] +=
+                kernels::gaussLegendreWeights[order][n1] *
+                kernels::gaussLegendreWeights[order][n2] *
+                kernels::fineGridProjector1d[order][subcellIndex[0]][m1][n1] *
+                kernels::fineGridProjector1d[order][subcellIndex[1]][m2][n2] *
+                luhFine[idx(n2,n1,ivar)] /
+                kernels::gaussLegendreWeights[order][m1] /
+                kernels::gaussLegendreWeights[order][m2] / 9.0;
+          }
+        }
+      }
+    }
+  }
+}
+
+template <int numberOfVariables, int numberOfParameters, int basisSize>
+void kernels::aderdg::generic::c::volumeUnknownsRestriction(double* luhCoarse,
+                               const double* luhFine,
+                               const int coarseGridLevel,
+                               const int fineGridLevel,
+                               const tarch::la::Vector<DIMENSIONS, int>& subcellIndex){
+  constexpr int numberOfData = numberOfVariables+numberOfParameters;
+  constexpr int basisSize2   = basisSize*basisSize;
+
+  const int levelDelta     = fineGridLevel - coarseGridLevel;
+
+  double luhCoarseTemp1[basisSize2*numberOfData];
+  double luhCoarseTemp2[basisSize2*numberOfData];
+
+  double * pointerUh1 = 0;
+  double * pointerUh2 = 0;
+
+  pointerUh1 = luhCoarseTemp1;
+
+  tarch::la::Vector<DIMENSIONS,int> subcellIndexCurrent(subcellIndex);
+
+  tarch::la::Vector<DIMENSIONS,int> subintervalIndex;
+  // This loop step by step decodes the elements of subcellIndex into a tertiary basis
+  // starting with the lowest significance 3^0 (in contrast to the prolongation decoding).
+  //
+  // Per iteration, the digits corresponding to the current significances then determine
+  // the subintervals for the single level restriction.
+  for (int l = 1; l < levelDelta+1; ++l) {
+    subintervalIndex[0]    = subcellIndexCurrent[0] % 3;
+    subintervalIndex[1]    = subcellIndexCurrent[1] % 3;
+    subcellIndexCurrent[0] = (subcellIndexCurrent[0] - subintervalIndex[0])/3;
+    subcellIndexCurrent[1] = (subcellIndexCurrent[1] - subintervalIndex[1])/3;
+    assertion(subintervalIndex[0] < 3);
+    assertion(subintervalIndex[1] < 3);
+
+    // Zero the values of the first pointer.
+    std::fill_n(pointerUh1, basisSize2*numberOfData, 0.0);
+
+    // Apply the single level restriction operator.
+    // Use the fine level unknowns in the first iteration as input.
+    if (l==1) {
+      singleLevelVolumeUnknownsRestriction<numberOfData,basisSize>(
+          pointerUh1,
+          luhFine,
+          subintervalIndex);
+    } else {
+      singleLevelVolumeUnknownsRestriction<numberOfData,basisSize>(
+          pointerUh1,
+          pointerUh2,
+          subintervalIndex);
+    }
+
+    // Prepare next iteration.
+    pointerUh2 = pointerUh1;
+
+    // Toggle the addresses of the pointers.
+    if (pointerUh1 == luhCoarseTemp1) {
+      pointerUh1 = luhCoarseTemp2;
+    } else {
+      pointerUh1 = luhCoarseTemp1;
+    }
+  }
+
+  // Add restricted fine level unknowns to coarse level unknowns.
+  accumulate<basisSize2*numberOfData>(luhCoarse,pointerUh2);
+}
+#endif

@@ -1,0 +1,270 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ *
+ * \author Dominic E. Charrier, Ben Hazelwood
+ **/
+#include "tarch/parallel/Node.h"
+
+#include "tarch/la/Scalar.h"
+#include "tarch/la/VectorOperations.h"
+
+#include <algorithm>
+
+template<int Alignment,typename Type,MPI_Datatype MPIType,bool copySendBuffer>
+tarch::logging::Log exahype::parallel::NonBlockingExchanger<Alignment,Type,MPIType,copySendBuffer>::_log("exahype::parallel::NonBlockingExchanger");
+
+template<int Alignment,typename Type,MPI_Datatype MPIType,bool copySendBuffer>
+tarch::multicore::BooleanSemaphore exahype::parallel::NonBlockingExchanger<Alignment,Type,MPIType,copySendBuffer>::ModifyTasksSemaphore;
+
+template<int Alignment,typename Type,MPI_Datatype MPIType,bool copySendBuffer>
+exahype::parallel::NonBlockingExchanger<Alignment,Type,MPIType,copySendBuffer>::NonBlockingExchanger() {  
+  MPI_Comm_dup(tarch::parallel::Node::getInstance().getCommunicator(), &_communicator);
+  NonBlockingExchangers.push_back(this);
+}
+
+template<int Alignment,typename Type,MPI_Datatype MPIType,bool copySendBuffer>
+exahype::parallel::NonBlockingExchanger<Alignment,Type,MPIType,copySendBuffer>&
+exahype::parallel::NonBlockingExchanger<Alignment,Type,MPIType,copySendBuffer>::getInstance() {
+  static NonBlockingExchanger<Alignment,Type,MPIType,copySendBuffer> singleton;
+  return singleton;
+}
+
+template<int Alignment,typename Type,MPI_Datatype MPIType,bool copySendBuffer>
+void exahype::parallel::NonBlockingExchanger<Alignment,Type,MPIType,copySendBuffer>::configure(
+    const std::string name,const bool useProgressThread) {
+  _name = name;
+  _useProgressThread = useProgressThread;
+}
+
+template<int Alignment,typename Type,MPI_Datatype MPIType,bool copySendBuffer>
+bool exahype::parallel::NonBlockingExchanger<Alignment,Type,MPIType,copySendBuffer>::useProgressThread() const {
+  return _useProgressThread;
+}
+
+// TODO(Dominic): Provide one-sided routines as well.
+// In this case, simply change the respective request to MPI_Request_null
+template<int Alignment,typename Type,MPI_Datatype MPIType,bool copySendBuffer>
+void exahype::parallel::NonBlockingExchanger<Alignment,Type,MPIType,copySendBuffer>::postSendAndReceive(
+    const Type* const                           sendBuffer,
+    const int                                   sendBufferSize,
+    const int                                   receiveBufferSize,
+    const int                                   rank,
+    const tarch::la::Vector<DIMENSIONS,double>& x,
+    const int                                   level,
+    const int                                   userTag // not the MPI tag
+) {  
+  SendReceiveTask* task = new SendReceiveTask(x,level,userTag);
+ 
+  if ( copySendBuffer ) {
+    task->_sendBuffer = allocateBuffer(sendBufferSize,false);
+    for (int i=0; i<sendBufferSize; i++) {
+      *(task->_sendBuffer + i) = *(sendBuffer+i);
+    }
+  } else {
+    task->_sendBuffer = nullptr;
+  }
+  task->_receiveBuffer = allocateBuffer(receiveBufferSize,true);
+ 
+  MPI_Irecv( task->_receiveBuffer, 
+     receiveBufferSize, MPIType, rank, 0 /*mpiTag*/, _communicator,
+     &task->_receiveRequest
+  );
+
+  MPI_Isend( (copySendBuffer) ? task->_sendBuffer : sendBuffer, 
+    sendBufferSize, MPIType, rank, 0 /*mpiTag*/, _communicator,
+    &task->_sendRequest
+  );
+  
+  tarch::multicore::Lock lock(ModifyTasksSemaphore);
+  if ( _tasks.count(rank)==0 ) {
+    _tasks.insert( std::make_pair( rank, std::vector<SendReceiveTask*>() ) );
+  }
+  assertion( _tasks.count(rank)==1 );
+  _tasks[rank].push_back(task);
+  _numberOfNewSendReceiveTasks++;
+  lock.free();
+  
+}
+
+template<int Alignment,typename Type,MPI_Datatype MPIType,bool copySendBuffer>
+Type* exahype::parallel::NonBlockingExchanger<Alignment,Type,MPIType,copySendBuffer>::allocateBuffer(
+    const int size,const bool aligned) const {
+  void* p = nullptr;
+  int errorValue = 0;
+  
+  if ( Alignment < 2 || !aligned ) {
+    p = malloc(size*sizeof(Type));
+  } else {
+    errorValue = posix_memalign(&p, Alignment, size*sizeof(Type));
+  }
+  if ( errorValue > 0 || p==nullptr ) {
+    logError( "allocateReceiveBuffer(DataVectorType)", "memory allocation failed. Terminate" );
+    exit(-1);
+  }
+  Type* buffer = static_cast<Type*>(p);
+  p = nullptr;
+  return buffer;
+}
+
+template<int Alignment,typename Type,MPI_Datatype MPIType,bool copySendBuffer>
+Type* exahype::parallel::NonBlockingExchanger<Alignment,Type,MPIType,copySendBuffer>::waitForSendAndReceiveTaskToComplete(SendReceiveTask* task) {
+  int flag;
+  bool complete = false;
+  while (!complete) {
+    complete = true;
+    #if defined(SharedMemoryParallelisation) && defined(MultipleThreadsMayTriggerMPICalls)
+    // tarch::multicore::Lock lock(ProgressSemaphore); // wait till progress thread is done
+    if ( _useProgressThread ) {
+      complete = task->_complete;
+    } else {
+      MPI_Wait(&task->_receiveRequest,MPI_STATUS_IGNORE); // Do not call wait twice on same request: https://lists.mpich.org/pipermail/discuss/2015-January/003610.html
+      MPI_Wait(&task->_sendRequest,MPI_STATUS_IGNORE);
+    }
+    // lock.free();
+    #else
+    MPI_Wait(&task->_receiveRequest,MPI_STATUS_IGNORE); // Do not call wait twice on same request: https://lists.mpich.org/pipermail/discuss/2015-January/003610.html
+    MPI_Wait(&task->_sendRequest,MPI_STATUS_IGNORE);
+    #endif
+  }
+  return task->_receiveBuffer;
+}
+
+template<int Alignment,typename Type,MPI_Datatype MPIType,bool copySendBuffer>
+Type* exahype::parallel::NonBlockingExchanger<Alignment,Type,MPIType,copySendBuffer>::waitForSendAndReceiveTaskToComplete(
+    const int                                   rank,
+    const tarch::la::Vector<DIMENSIONS,double>& x,
+    const int                                   level,
+    const int                                   userTag) {
+  Type* receiveBuffer = nullptr;
+  if ( _pickupMessagesInReversedOrder ) {
+    for ( unsigned int i = _tasks[rank].size(); i-->0; ) {
+      SendReceiveTask* task = _tasks[rank][i]; // loop bodies are identical
+      if( task->matches(x,level,userTag) ) {
+        // assertion(_tasks[rank].size()-1-i, 0); Only valid if post and pickup order match
+        receiveBuffer = waitForSendAndReceiveTaskToComplete(task);
+        break;
+      }
+    }
+  } else {
+    for ( unsigned int i = 0; i < _tasks[rank].size(); ++i ) {
+      SendReceiveTask* task = _tasks[rank][i]; // loop bodies are identical
+      if( task->matches(x,level,userTag) ) {
+        // assertion(_tasks[rank].size()-1-i, 0); Only valid if post and pickup order match
+        receiveBuffer = waitForSendAndReceiveTaskToComplete(task);
+        break;
+      }
+    }
+  }
+  _numberOfProcessedSendReceiveTasks++;
+     
+  return receiveBuffer;
+}
+
+template<int Alignment,typename Type,MPI_Datatype MPIType,bool copySendBuffer>
+void exahype::parallel::NonBlockingExchanger<Alignment,Type,MPIType,copySendBuffer>::deleteSendAndReceiveTask(
+    SendReceiveTask* task) {
+  if ( task->_receiveBuffer!=nullptr ) {
+    free( task->_receiveBuffer );
+    task->_receiveBuffer = nullptr;
+  }
+  if ( task->_sendBuffer!=nullptr ) {
+    free( task->_sendBuffer );
+    task->_sendBuffer = nullptr;
+  }
+  delete task;
+}
+
+
+template<int Alignment,typename Type,MPI_Datatype MPIType,bool copySendBuffer>
+void exahype::parallel::NonBlockingExchanger<Alignment,Type,MPIType,copySendBuffer>::deleteSendAndReceiveTask(
+    const int                                   rank,
+    const tarch::la::Vector<DIMENSIONS,double>& x,
+    const int                                   level,
+    const int                                   userTag) {
+  tarch::multicore::Lock lock(ModifyTasksSemaphore);
+  if ( _pickupMessagesInReversedOrder  ) {
+    for ( unsigned int i = _tasks[rank].size(); i-->0; ) {
+      SendReceiveTask* task = _tasks[rank][i]; // loop bodies are identical
+      if( task->matches(x,level,userTag) ) {
+        // assertion(_tasks[rank].size()-1-i, 0); Only valid if post and pickup order match
+        deleteSendAndReceiveTask(task);
+        _tasks[rank].erase(_tasks[rank].begin()+i);
+        break;
+      }
+    }
+  } else {
+    for ( unsigned int i = 0; i < _tasks[rank].size(); ++i ) {
+      SendReceiveTask* task = _tasks[rank][i]; // loop bodies are identical
+      if( task->matches(x,level,userTag) ) {
+        // assertion(_tasks[rank].size()-1-i, 0); Only valid if post and pickup order match
+        deleteSendAndReceiveTask(task);
+        _tasks[rank].erase(_tasks[rank].begin()+i);
+        break;
+      }
+    }
+  }
+  _numberOfDeletedSendReceiveTasks++;
+  lock.free();
+}
+
+// Do not call wait twice on same request: https://lists.mpich.org/pipermail/discuss/2015-January/003610.html
+// Do not wait on null request
+template<int Alignment,typename Type,MPI_Datatype MPIType,bool copySendBuffer>
+void exahype::parallel::NonBlockingExchanger<Alignment,Type,MPIType,copySendBuffer>::progressAllSendAndReceiveTasks() {
+  for (auto rankIter=_tasks.begin(); rankIter!=_tasks.end(); ++rankIter) {
+    for (auto taskIter=rankIter->second.begin(); taskIter!=rankIter->second.end(); ++taskIter) {
+      SendReceiveTask* task = *taskIter;
+      MPI_Wait(&task->_receiveRequest,MPI_STATUS_IGNORE);
+      MPI_Wait(&task->_sendRequest,MPI_STATUS_IGNORE);
+      task->_complete = true;
+    }
+  }
+}
+
+
+template<int Alignment,typename Type,MPI_Datatype MPIType,bool copySendBuffer>
+void exahype::parallel::NonBlockingExchanger<Alignment,Type,MPIType,copySendBuffer>::finishedPostingSendsAndReceives(const bool pickupMessagesInReversedOrder) {
+  _pickupMessagesInReversedOrder = pickupMessagesInReversedOrder;
+  
+  logInfo("finishedPostingSendsAndReceives(bool)",_name << ": initiated " << _numberOfNewSendReceiveTasks << " new data exchanges");
+  
+  int numberOfTasks = 0;
+  tarch::multicore::Lock lock(ModifyTasksSemaphore);
+  for (auto rankIter=_tasks.begin(); rankIter!=_tasks.end(); ) {
+    const int tasksPerRank = rankIter->second.size();
+    numberOfTasks += tasksPerRank;
+    if ( tasksPerRank==0 ) {
+      rankIter = _tasks.erase(rankIter);
+    } else {
+      ++rankIter;
+    }
+  }
+  lock.free();
+  
+  if ( numberOfTasks > 0 ) {
+    logInfo("finishedPostingSendsAndReceives(bool)",_name << ": initiated " << _numberOfNewSendReceiveTasks << " new data exchanges");
+  }
+  
+  const int numberOfLeftOverTasks = numberOfTasks-_numberOfNewSendReceiveTasks;
+  if ( numberOfLeftOverTasks > 0 ) {
+    logError("finishedPostingSendsAndReceives(bool)",_name << ": there are " << numberOfLeftOverTasks << " SendReceiveTasks from previous iterations which have not been processed "
+        "via wait...(...) and/or removed via delete...(...).");
+    logError("finishedPostingSendsAndReceives(bool)",_name << ": number of new SendReceiveTasks in this iteration:                      " << _numberOfNewSendReceiveTasks);
+    logError("finishedPostingSendsAndReceives(bool)",_name << ": number of processed (\"received\") SendReceiveTasks in this iteration: " << _numberOfProcessedSendReceiveTasks);
+    logError("finishedPostingSendsAndReceives(bool)",_name << ": number of deleted SendReceiveTasks in this iteration:                  " << _numberOfDeletedSendReceiveTasks);
+    std::terminate();
+  }
+  
+  _numberOfNewSendReceiveTasks       = 0;
+  _numberOfProcessedSendReceiveTasks = 0;
+  _numberOfDeletedSendReceiveTasks   = 0;
+}

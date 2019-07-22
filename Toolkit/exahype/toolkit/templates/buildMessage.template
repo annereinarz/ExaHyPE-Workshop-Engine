@@ -1,0 +1,25 @@
+please change into directory {{outputPath}} and type make
+ensure that you set all environment variables before:
+  export COMPILER=GNU                   Select GNU compiler
+  export COMPILER=Intel                 Select Intel compiler (default)
+
+  export MODE=Debug                     Build debug version of code
+  export MODE=Asserts                   Build release version of code that is augmented with assertions
+  export MODE=Profile                   Build release version of code that produces profiling information
+  export MODE=Release                   Build release version of code (default)
+
+  export SHAREDMEM=TBB                  Use Intel's Threading Building Blocks (TBB) for shared memory parallelisation{{" (default with the current specification)" if useSharedMem else ""}}
+  export SHAREDMEM=OMP                  Use OpenMP for shared memory parallelisation
+  export SHAREDMEM=None                 Do not use shared memory{{" (default)" if (not useSharedMem) else ""}}
+
+  export DISTRIBUTEDMEM=MPI             Use MPI{{" (default with the current specification)" if useDistributedMem else ""}}
+  export DISTRIBUTEDMEM=None            Do not use MPI{{" (default)" if (not useDistributedMem) else ""}}
+
+  export TBB_INC=-I...                  Indicate where to find TBB headers (only required if SHAREDMEM=TBB). Please add -I (Linux) prefix to path
+  export TBB_SHLIB="-L... -ltbb"        Indicate where to find TBB's shared libraries (only required if SHAREDMEM=TBB). Variable has to comprise both search path and library name
+
+  export USE_IPO=on                     Compile using IPO for the solvers and kernels (only with Intel compilers)
+
+  If USE_IPO is not specified, it falls back to "off" (compilation without IPO).
+
+  If you run CSH, please replace "export ARG=VALUE" with "setenv ARG VALUE".

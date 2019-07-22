@@ -1,0 +1,180 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/
+
+#include "../../Kernels.h"
+
+#include <cstring>
+
+#include <tarch/la/Vector.h>
+
+#include "../../../../DGMatrices.h"
+#include "../../../../GaussLegendreQuadrature.h"
+#include "../../../../KernelUtils.h"
+
+namespace kernels {
+namespace aderdg {
+namespace generic {
+namespace c {
+
+#if DIMENSIONS == 2
+
+/*
+ * Depending on the template parameter noTimeAveraging, lFi
+ * is either a space-time volume flux (false) or a time-averaged flux (true). 
+ */
+template <bool useSourceOrNCP, bool useFlux, bool noTimeAveraging, const int numberOfVariables, int basisSize>
+void volumeIntegralNonlinear(double* lduh, const double* const lFi,
+                             const tarch::la::Vector<DIMENSIONS, double>& dx) {
+  const int order = basisSize - 1;
+  const int basisSize2 = basisSize  * basisSize;
+
+  const double invDx[2] = { 1.0/dx[0], 1.0/dx[1] };
+  
+  // Initialize the update DOF
+  std::fill_n(lduh, basisSize2 * numberOfVariables, 0.0);
+  
+  if(noTimeAveraging) {
+
+    if (useFlux) {
+      idx3 idx(basisSize, basisSize, numberOfVariables);
+      idx5 idx_lFi(basisSize, basisSize, basisSize, DIMENSIONS+1,numberOfVariables); // (t,y,x,flux/source,var)
+      
+      for (int i = 0; i < basisSize; i++) { // loop over time unknowns
+        // x-direction
+        for (int j = 0; j < basisSize; j++) {
+          const double weight =
+              kernels::gaussLegendreWeights[order][i] *
+              kernels::gaussLegendreWeights[order][j];
+          const double updateSize = weight * invDx[0];
+
+          // Matrix product: (l, m) * (m, k) = (l, k)
+          for (int k = 0; k < basisSize; k++) {
+            for (int l = 0; l < numberOfVariables; l++) {
+              for (int m = 0; m < basisSize; m++) {
+                lduh[idx(j, k, l)] += 
+                    kernels::Kxi[order][k][m] *
+                    lFi[idx_lFi(i, j, m, 0, l)] * updateSize;
+              }
+            }
+          }
+        }
+
+        // y-direction
+        for (int k = 0; k < basisSize; k++) {
+          const double weight =
+              kernels::gaussLegendreWeights[order][i] *
+              kernels::gaussLegendreWeights[order][k];
+          const double updateSize = weight * invDx[1];
+
+          // Matrix product: (l, m) * (m, k) = (l, k)
+          for (int j = 0; j < basisSize; j++) {
+            for (int l = 0; l < numberOfVariables; l++) {
+              for (int m = 0; m < basisSize; m++) {
+                lduh[idx(j, k, l)] += 
+                    kernels::Kxi[order][j][m] * 
+                    lFi[idx_lFi(i, m, k, 1, l)] * updateSize;
+              }
+            }
+          }
+        }
+      }
+    } // useFlux
+    
+    // source
+    if (useSourceOrNCP) {
+      idx3 idx(basisSize, basisSize, numberOfVariables);
+      idx5 idx_lFi(basisSize, basisSize, basisSize, DIMENSIONS+1,numberOfVariables); // (t,y,x,flux/source,var)
+      
+      for (int i = 0; i < basisSize; i++) { // loop over time unknowns
+        for (int j = 0; j < basisSize; j++) {
+          for (int k = 0; k < basisSize; k++) {
+            const double weight =
+                kernels::gaussLegendreWeights[order][i] *
+                kernels::gaussLegendreWeights[order][j] *
+                kernels::gaussLegendreWeights[order][k];
+
+            for (int l = 0; l < numberOfVariables; l++) {
+              lduh[idx(j, k, l)] += weight * lFi[idx_lFi(i, j, k, 2, l)];
+            }
+          }
+        }
+      }
+    } // useSource
+  
+  } else { //noTimeAveraging
+  
+    idx3 idx(basisSize, basisSize, numberOfVariables);
+
+    if (useFlux) {
+      // x-direction
+      const int x_offset = 0 * basisSize2 * numberOfVariables;
+      for (int j = 0; j < basisSize; j++) {
+        const double weight = kernels::gaussLegendreWeights[order][j];
+        const double updateSize = weight * invDx[0];
+
+        // Fortran: lduh(l, k, j) += lFi_x(l, m, j) * Kxi(m, k)
+        // Matrix product: (l, m) * (m, k) = (l, k)
+        for (int k = 0; k < basisSize; k++) {
+          for (int l = 0; l < numberOfVariables; l++) {
+            for (int m = 0; m < basisSize; m++) {
+              lduh[idx(j, k, l)] += kernels::Kxi[order][k][m] *
+                  lFi[x_offset + idx(j, m, l)] * updateSize;
+            }
+          }
+        }
+      }
+
+      // y-direction
+      const int y_offset = 1 * basisSize2 * numberOfVariables;
+      for (int j = 0; j < basisSize; j++) {
+        const double weight = kernels::gaussLegendreWeights[order][j];
+        const double updateSize = weight * invDx[1];
+
+        // Fortran: lduh(l, j, k) += lFi_y(l, m, j) * Kxi(m, k)
+        // Matrix product: (l, m) * (m, k) = (l, k)
+        for (int k = 0; k < basisSize; k++) {
+          for (int l = 0; l < numberOfVariables; l++) {
+            for (int m = 0; m < basisSize; m++) {
+              lduh[idx(k, j, l)] += kernels::Kxi[order][k][m] *
+                  lFi[y_offset + idx(j, m, l)] * updateSize;
+            }
+          }
+        }
+      }
+    }
+
+    // source
+    if(useSourceOrNCP) {
+      idx3 idx(basisSize, basisSize, numberOfVariables);
+      const int s_offset = 2 * basisSize2 * numberOfVariables;
+      for (int j = 0; j < basisSize; j++) {
+        for (int k = 0; k < basisSize; k++) {
+          const double weight = kernels::gaussLegendreWeights[order][j] *
+                                kernels::gaussLegendreWeights[order][k];
+
+          // Fortran: lduh(:,k,j) += w * lShi(:,k,j)
+          for (int l = 0; l < numberOfVariables; l++) {
+            lduh[idx(j, k, l)] += weight * lFi[s_offset + idx(j, k, l)];
+          }
+        }
+      }
+    }
+  }
+}
+
+#endif  // DIMENSIONS == 2
+
+}  // namespace c
+}  // namespace generic
+}  // namespace aderdg
+}  // namespace kernels

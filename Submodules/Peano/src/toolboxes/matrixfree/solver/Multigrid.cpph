@@ -1,0 +1,117 @@
+template <int StencilSize1d, int StencilSize>
+tarch::la::Vector<THREE_POWER_D,double> matrixfree::solver::Multigrid::getGalerkinMultigridOperatorForDLinearInterpolationAndRestriction( int fineGridSubdivisionFactor, const tarch::la::Vector<StencilSize,double>& fineGridStencil ) {
+  assertion(fineGridSubdivisionFactor>=2);
+
+  tarch::la::Vector<THREE_POWER_D,double> result(0.0);
+
+  const int numberOfVertices1d = 4*fineGridSubdivisionFactor+1;
+  const int numberOfVertices   = tarch::la::aPowI(DIMENSIONS,numberOfVertices1d);
+  double* fineGridP  = new double[numberOfVertices];
+  double* fineGridAP = new double[numberOfVertices];
+
+  dfor3(coarseGridVertex)
+    // initialise fine grid with zero
+    int counter = 0;
+    dfor(i,numberOfVertices1d) {
+      fineGridP[counter]  = 0.0;
+      fineGridAP[counter] = 0.0;
+      counter++;
+    }
+
+    // prolong
+    dfor(fineGridVertex,numberOfVertices1d) {
+      const int linearisedFineGridVertex = peano::utils::dLinearisedWithoutLookup(fineGridVertex,numberOfVertices1d);
+      double weight = 1.0;
+      for (int d=0; d<DIMENSIONS; d++) {
+        const double weight1d = static_cast<double>((fineGridSubdivisionFactor - std::abs( (coarseGridVertex(d)+1)*fineGridSubdivisionFactor - fineGridVertex(d) ) )) / static_cast<double>(fineGridSubdivisionFactor);
+        assertion(weight1d<=1.0);
+        weight *= tarch::la::greaterEquals(weight1d,0.0) ? weight1d : 0.0;
+      }
+      fineGridP[linearisedFineGridVertex] = weight;
+    }
+
+    // apply stencil
+    dfor(fineGridVertex,2*fineGridSubdivisionFactor-StencilSize1d) {
+      const int linearisedDestVertex = peano::utils::dLinearisedWithoutLookup(fineGridVertex+fineGridSubdivisionFactor+1,numberOfVertices1d);
+      dfor(stencilEntry,StencilSize1d) {
+        const int stencilEntryScalar = peano::utils::dLinearisedWithoutLookup(stencilEntry,StencilSize1d);
+        const int linearisedSrcVertex = peano::utils::dLinearisedWithoutLookup(fineGridVertex+fineGridSubdivisionFactor+stencilEntry,numberOfVertices1d);
+        fineGridAP[linearisedDestVertex] += fineGridP[linearisedSrcVertex] * fineGridStencil(stencilEntryScalar);
+      }
+    }
+
+    // restrict
+    dfor(fineGridVertex,numberOfVertices1d) {
+      const int linearisedFineGridVertex = peano::utils::dLinearisedWithoutLookup(fineGridVertex,numberOfVertices1d);
+      double weight = 1.0;
+      for (int d=0; d<DIMENSIONS; d++) {
+        // always restrict towards centre
+        const double weight1d = static_cast<double>((fineGridSubdivisionFactor - std::abs( 2*fineGridSubdivisionFactor - fineGridVertex(d) ) )) / static_cast<double>(fineGridSubdivisionFactor);
+        assertion(weight1d<=1.0);
+        weight *= tarch::la::greaterEquals(weight1d,0.0) ? weight1d : 0.0;
+      }
+      result(coarseGridVertexScalar) += fineGridAP[linearisedFineGridVertex] * weight;
+    }
+    logDebug( "getGalerkinMultigridOperatorForDLinearInterpolationAndRestriction(int,stencil)", "result stencil entry " << coarseGridVertex << ": " << result(coarseGridVertexScalar) );
+
+  enddforx
+
+  delete[] fineGridP;
+  delete[] fineGridAP;
+  return result;
+}
+
+
+template <int StencilSize1d, int StencilSize>
+tarch::la::Vector<THREE_POWER_D,double> matrixfree::solver::Multigrid::getGalerkinMultigridOperatorForDLinearInterpolationAndInjection( int fineGridSubdivisionFactor, const tarch::la::Vector<StencilSize,double>& fineGridStencil ) {
+  assertion(fineGridSubdivisionFactor>=2);
+
+  tarch::la::Vector<THREE_POWER_D,double> result(0.0);
+
+  const int numberOfVertices1d = 4*fineGridSubdivisionFactor+1;
+  const int numberOfVertices   = tarch::la::aPowI(DIMENSIONS,numberOfVertices1d);
+  double* fineGridP  = new double[numberOfVertices];
+  double* fineGridAP = new double[numberOfVertices];
+
+  dfor3(coarseGridVertex)
+    // initialise fine grid with zero
+    int counter = 0;
+    dfor(i,numberOfVertices1d) {
+      fineGridP[counter]  = 0.0;
+      fineGridAP[counter] = 0.0;
+      counter++;
+    }
+
+    // prolong
+    dfor(fineGridVertex,numberOfVertices1d) {
+      const int linearisedFineGridVertex = peano::utils::dLinearisedWithoutLookup(fineGridVertex,numberOfVertices1d);
+      double weight = 1.0;
+      for (int d=0; d<DIMENSIONS; d++) {
+        const double weight1d = static_cast<double>((fineGridSubdivisionFactor - std::abs( (coarseGridVertex(d)+1)*fineGridSubdivisionFactor - fineGridVertex(d) ) )) / static_cast<double>(fineGridSubdivisionFactor);
+        assertion(weight1d<=1.0);
+        weight *= tarch::la::greaterEquals(weight1d,0.0) ? weight1d : 0.0;
+      }
+      fineGridP[linearisedFineGridVertex] = weight;
+    }
+
+    // apply stencil (too generic, should be only central element)
+    dfor(fineGridVertex,2*fineGridSubdivisionFactor-StencilSize1d) {
+      const int linearisedDestVertex = peano::utils::dLinearisedWithoutLookup(fineGridVertex+fineGridSubdivisionFactor+1,numberOfVertices1d);
+      dfor(stencilEntry,StencilSize1d) {
+        const int stencilEntryScalar = peano::utils::dLinearisedWithoutLookup(stencilEntry,StencilSize1d);
+        const int linearisedSrcVertex = peano::utils::dLinearisedWithoutLookup(fineGridVertex+fineGridSubdivisionFactor+stencilEntry,numberOfVertices1d);
+        fineGridAP[linearisedDestVertex] += fineGridP[linearisedSrcVertex] * fineGridStencil(stencilEntryScalar);
+      }
+    }
+
+    // restrict
+    const int linearisedFineGridVertexCoincidingWithCoarseGridPoint = peano::utils::dLinearisedWithoutLookup(2*fineGridSubdivisionFactor,numberOfVertices1d);
+    result(coarseGridVertexScalar) = fineGridAP[linearisedFineGridVertexCoincidingWithCoarseGridPoint];
+    logDebug( "getGalerkinMultigridOperatorForDLinearInterpolationAndRestriction(int,stencil)", "result stencil entry " << coarseGridVertex << ": " << result(coarseGridVertexScalar) );
+
+  enddforx
+
+  delete[] fineGridP;
+  delete[] fineGridAP;
+  return result;
+}

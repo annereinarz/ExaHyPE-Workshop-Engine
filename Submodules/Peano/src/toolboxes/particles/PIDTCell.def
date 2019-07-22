@@ -1,0 +1,3 @@
+class pidt::PIDTCell {
+  persistent double  pidtMaxDx;
+};

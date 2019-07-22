@@ -1,0 +1,3 @@
+class pidt::PIDTVertex {  
+  persistent int           pidtVertexIndex;
+};

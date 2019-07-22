@@ -1,0 +1,872 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/
+
+#include <cstring>
+
+#include "tarch/la/Vector.h"
+#include "tarch/multicore/Loop.h"
+#include "peano/datatraversal/autotuning/Oracle.h"
+
+#include "../../../../DGMatrices.h"
+#include "../../../../GaussLegendreQuadrature.h"
+#include "../../../../KernelUtils.h"
+
+#if DIMENSIONS == 3
+
+namespace kernels {
+namespace aderdg {
+namespace generic {
+namespace c {
+
+namespace {
+
+/*
+ * For the linear kernels, we need the material parameters in the
+ * space-time predictor lQi, time-averaged predictor lQhi,
+ * and extrapolated predictor lQhbnd.
+ * Currently we simply copy them over from the solution array.
+ *
+ */
+template <bool useSource, bool useFlux, bool useViscousFlux, bool useNCP,
+          typename SolverType>
+int aderPicardLoopNonlinear(SolverType& solver, const double* luh,
+                            const double t,
+                            const double dt,
+                            const tarch::la::Vector<DIMENSIONS, double>& cellCenter,
+                            const tarch::la::Vector<DIMENSIONS, double>& invDx,
+                            double* lQi, double* rhs, double* lFi,
+                            double* gradQ) {
+  constexpr int numberOfVariables = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int numberOfData = numberOfVariables + numberOfParameters;
+  constexpr int order = SolverType::Order;
+  constexpr int basisSize = order + 1;
+  constexpr int basisSize2 = basisSize * basisSize;
+  constexpr int basisSize3 = basisSize2 * basisSize;
+  constexpr int sizeGradQ = DIMENSIONS * numberOfVariables * basisSize3;
+
+  constexpr bool useMaxPicardIterations = SolverType::UseMaxPicardIterations;
+  constexpr int maxPicardIterations = SolverType::MaxPicardIterations;
+
+  assertion(numberOfVariables >= 0);
+  assertion(numberOfParameters >= 0);
+
+  idx4 idx_luh(basisSize, basisSize, basisSize, numberOfData);
+
+  idx5 idx_lQi(basisSize, basisSize, basisSize, basisSize, numberOfData);
+
+  idx6 idx_lFi(basisSize, basisSize, basisSize, basisSize, DIMENSIONS + 1,
+               numberOfVariables);
+  // (t,z,y,x,dim,var)
+
+  // 1. Trivial initial guess
+  for (int i = 0; i < basisSize; i++) {        // i == z
+    for (int j = 0; j < basisSize; j++) {      // j == y
+      for (int k = 0; k < basisSize; k++) {    // k == x
+        for (int l = 0; l < basisSize; l++) {  // l==t
+          // Fortran: lQi(m,:,k,j,i) = luh(m,k,j,i)
+          std::copy_n(luh + idx_luh(i, j, k, 0), numberOfData,
+                      lQi + idx_lQi(i, j, k, l, 0));
+        }
+      }
+    }
+  }
+
+  // 2. Discrete Picard iterations
+  constexpr int MaxIterations =
+      (useMaxPicardIterations) ? maxPicardIterations : 2 * (order + 1);
+  // right-hand side
+  idx5 idx_rhs(basisSize, basisSize, basisSize, basisSize,
+               numberOfVariables);  // idx_rhs(t,z,y,x,nVar)
+  // spatial gradient of q
+  // idx_gradQ(z,y,x,nDim,nVar)
+  idx5 idx_gradQ(basisSize, basisSize, basisSize, DIMENSIONS,
+                 numberOfVariables);
+  // If the flux depends on the gradient we need to return the time-averaged
+  // gradient in gradQ.
+  // The variable gradQCur corresponds to the gradient for the
+  // current timestep.
+  auto gradQCur = gradQ;  // no need to allocate here.
+  if (useViscousFlux) {
+    // Allocate new buffer for averaged gradient.
+    gradQCur = new double[sizeGradQ];
+  }
+
+  int iter = 0;
+  for (; iter < MaxIterations; iter++) {
+    // TODO(Lukas) Do i need to reset the gradient here?
+    std::memset(gradQ, 0.0, sizeGradQ * sizeof(double));
+    for (int i = 0; i < basisSize; i++) {  // time DOF
+      // Compute gradients only if nonconservative contributions have to be
+      // computed or if the flux depends on the gradient.
+      if (useNCP || useViscousFlux) {
+        std::memset(gradQCur, 0.0,
+            sizeGradQ * sizeof(double));
+
+        // Compute the "derivatives" (contributions of the stiffness matrix)
+        // x direction (independent from the y and z derivatives)
+        for (int j = 0; j < basisSize; j++) {    // z
+          for (int k = 0; k < basisSize; k++) {  // y
+            // Matrix operation
+            for (int l = 0; l < basisSize; l++) {  // x
+              for (int m = 0; m < numberOfVariables; m++) {
+                for (int n = 0; n < basisSize; n++) {
+                  const auto idx = idx_gradQ(j, k, l, /*x*/ 0, m);
+                  const auto t = 1.0 * invDx[0] * lQi[idx_lQi(j, k, n, i, m)] *
+                                 kernels::dudx[order][l][n];
+                  gradQCur[idx] += t;
+                  if (useViscousFlux) {
+                    gradQ[idx] += t * kernels::gaussLegendreWeights[order][i];
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // y direction (independent from the x and z derivatives)
+        for (int j = 0; j < basisSize; j++) {    // z
+          for (int k = 0; k < basisSize; k++) {  // x
+            // Matrix operation
+            for (int l = 0; l < basisSize; l++) {  // y
+              for (int m = 0; m < numberOfVariables; m++) {
+                for (int n = 0; n < basisSize; n++) {
+                  const auto idx = idx_gradQ(j, l, k, /*y*/ 1, m);
+                  const auto t = 1.0 * invDx[1] * lQi[idx_lQi(j, n, k, i, m)] *
+                                 kernels::dudx[order][l][n];
+                  gradQCur[idx] += t;
+                  if (useViscousFlux) {
+                    gradQ[idx] += t * kernels::gaussLegendreWeights[order][i];
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // z direction (independent from the x and y derivatives)
+        for (int j = 0; j < basisSize; j++) {    // y
+          for (int k = 0; k < basisSize; k++) {  // x
+            // Matrix operation
+            for (int l = 0; l < basisSize; l++) {  // z
+              for (int m = 0; m < numberOfVariables; m++) {
+                for (int n = 0; n < basisSize; n++) {
+                  const auto idx = idx_gradQ(l, j, k, /*z*/ 2, m);
+                  const auto t = 1.0 * invDx[2] * lQi[idx_lQi(n, j, k, i, m)] *
+                                 kernels::dudx[order][l][n];
+                  gradQCur[idx] += t;
+                  if (useViscousFlux) {
+                    gradQ[idx] += t * kernels::gaussLegendreWeights[order][i];
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      /*
+      for (int j = 0; i < basisSize; ++j) {
+	for (int k = 0; j < basisSize; ++k) {
+	  for (int l = 0; k < basisSize; ++l) {
+	    for (int dim = 0; dim < DIMENSIONS; ++dim) {
+	      for (int var = 0; var < numberOfVariables; ++var) {
+		const auto idx = idx_gradQ(i,j,k,dim,var);
+		assertion7(std::isfinite(gradQCur[idx]), gradQCur[idx], i, j, k, l, dim, var);
+		assertion7(std::isfinite(gradQ[idx]), gradQCur[idx], i, j, k, l, dim, var);
+	      }
+	    }
+	  }
+	}
+      }
+      */
+
+
+
+      // Compute the fluxes
+      if (useFlux) {
+        for (int j = 0; j < basisSize; j++) {      // z
+          for (int k = 0; k < basisSize; k++) {    // y
+            for (int l = 0; l < basisSize; l++) {  // x
+              // Call PDE fluxes
+              const double* Q = lQi + idx_lQi(j, k, l, i, 0);
+              double* F[3];
+              F[0] = lFi + idx_lFi(i, j, k, l, 0, 0);
+              F[1] = lFi + idx_lFi(i, j, k, l, 1, 0);
+              F[2] = lFi + idx_lFi(i, j, k, l, 2, 0);
+              if (useViscousFlux) {
+                // TODO(Lukas) Is the index correct here?
+                solver.viscousFlux(Q, gradQCur + idx_gradQ(j, k, l, 0, 0), F);
+              } else {
+                solver.flux(Q, F);
+              }
+
+              for (int m = 0; m < numberOfVariables; m++) {
+                assertion4(std::isfinite(lFi[idx_lFi(i, j, k, l, 0, m)]),
+                           lFi[idx_lFi(i, j, k, l, 0, m)], m, dt, invDx);
+                assertion4(std::isfinite(lFi[idx_lFi(i, j, k, l, 1, m)]),
+                           lFi[idx_lFi(i, j, k, l, 1, m)], m, dt, invDx);
+                assertion4(std::isfinite(lFi[idx_lFi(i, j, k, l, 1, m)]),
+                           lFi[idx_lFi(i, j, k, l, 2, m)], m, dt, invDx);
+              }
+
+              // the algebraic source call moved together with ncp products
+              // to the end.
+            }
+          }
+        }
+      }
+
+      // Compute the contribution of the initial condition uh to the right-hand
+      // side (rhs0)
+      for (int j = 0; j < basisSize; j++) {      // z
+        for (int k = 0; k < basisSize; k++) {    // y
+          for (int l = 0; l < basisSize; l++) {  // x
+            const double weight = kernels::gaussLegendreWeights[order][j] *
+                                  kernels::gaussLegendreWeights[order][k] *
+                                  kernels::gaussLegendreWeights[order][l];
+            for (int m = 0; m < numberOfVariables; m++) {
+              rhs[idx_rhs(i, j, k, l, m)] =
+                  weight * kernels::FLCoeff[order][i] *
+                  luh[idx_luh(j, k, l, m)];  // FLCoeff == F0
+              assertion3(std::isfinite(rhs[idx_rhs(i, j, k, l, m)]),
+                         rhs[idx_rhs(i, j, k, l, m)], dt, invDx);
+            }
+          }
+        }
+      }
+
+      // x direction (independent from the y and z derivatives)
+      for (int j = 0; j < basisSize; j++) {    // z
+        for (int k = 0; k < basisSize; k++) {  // y
+          const double weight = kernels::gaussLegendreWeights[order][i] *
+                                kernels::gaussLegendreWeights[order][j] *
+                                kernels::gaussLegendreWeights[order][k];
+          const double updateSize = weight * dt * invDx[0];
+
+          // Matrix operation
+          for (int l = 0; l < basisSize; l++) {  // x
+            for (int m = 0; m < numberOfVariables; m++) {
+              for (int n = 0; n < basisSize; n++) {
+                if (useFlux) {
+                  rhs[idx_rhs(i, j, k, l, m)] -=
+                      updateSize * lFi[idx_lFi(i, j, k, n, 0, m)] *
+                      kernels::Kxi[order][n][l];
+                  assertion3(std::isfinite(rhs[idx_rhs(i, j, k, l, m)]),
+                             rhs[idx_rhs(i, j, k, l, m)], dt, invDx);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // y direction (independent from the x and z derivatives)
+      for (int j = 0; j < basisSize; j++) {    // z
+        for (int k = 0; k < basisSize; k++) {  // x
+          const double weight = kernels::gaussLegendreWeights[order][i] *
+                                kernels::gaussLegendreWeights[order][j] *
+                                kernels::gaussLegendreWeights[order][k];
+          const double updateSize = weight * dt * invDx[1];
+
+          // Matrix operation
+          for (int l = 0; l < basisSize; l++) {  // y
+            for (int m = 0; m < numberOfVariables; m++) {
+              for (int n = 0; n < basisSize; n++) {
+                if (useFlux) {
+                  rhs[idx_rhs(i, j, l, k, m)] -=
+                      updateSize * lFi[idx_lFi(i, j, n, k, 1, m)] *
+                      kernels::Kxi[order][n][l];
+                  assertion3(std::isfinite(rhs[idx_rhs(i, j, l, k, m)]),
+                             rhs[idx_rhs(i, j, l, k, m)], dt, invDx);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // z direction (independent from the x and y derivatives)
+      for (int j = 0; j < basisSize; j++) {    // y
+        for (int k = 0; k < basisSize; k++) {  // x
+          const double weight = kernels::gaussLegendreWeights[order][i] *
+                                kernels::gaussLegendreWeights[order][j] *
+                                kernels::gaussLegendreWeights[order][k];
+          const double updateSize = weight * dt * invDx[2];
+
+          // Matrix operation
+          for (int l = 0; l < basisSize; l++) {  // z
+            for (int m = 0; m < numberOfVariables; m++) {
+              for (int n = 0; n < basisSize; n++) {
+                if (useFlux) {
+                  rhs[idx_rhs(i, l, j, k, m)] -=
+                      updateSize * lFi[idx_lFi(i, n, j, k, 2, m)] *
+                      kernels::Kxi[order][n][l];
+                  assertion3(std::isfinite(rhs[idx_rhs(i, l, j, k, m)]),
+                             rhs[idx_rhs(i, l, j, k, m)], dt, invDx);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (useSource || useNCP) {
+        // source
+        for (int j = 0; j < basisSize; j++) {      // z
+          for (int k = 0; k < basisSize; k++) {    // y
+            for (int l = 0; l < basisSize; l++) {  // x
+              const double weight = kernels::gaussLegendreWeights[order][i] *
+                                    kernels::gaussLegendreWeights[order][j] *
+                                    kernels::gaussLegendreWeights[order][k] *
+                                    kernels::gaussLegendreWeights[order][l];
+              const double updateSize = weight * dt;
+              double* S = lFi + idx_lFi(i, j, k, l, 3, 0);
+
+              // by intention, gradQCur is undefined here if useNCP is not true.
+              // This is because algebraicSource is only a function of Q and S.
+              // Old code (for reference): solver.fusedSource(&lQi[idx_lQi(j, k,
+              // l, i, 0)], &gradQCur[idx_gradQ(j, k, l, i, 0, 0)], S);
+              if (useSource) {
+                const double ti = t + kernels::gaussLegendreNodes[order][i] * dt;
+                const double x = cellCenter[0] + (1./invDx[0]) * (kernels::gaussLegendreNodes[order][l] - 0.5);
+                const double y = cellCenter[1] + (1./invDx[1]) * (kernels::gaussLegendreNodes[order][k] - 0.5);
+                const double z = cellCenter[2] + (1./invDx[2]) * (kernels::gaussLegendreNodes[order][j] - 0.5);
+                tarch::la::Vector<DIMENSIONS, double> coords = {x, y, z};
+                solver.algebraicSource(coords, ti, lQi+idx_lQi(j, k, l, i, 0), S);
+              } else {
+                std::fill_n(S, numberOfVariables, 0.0);
+              }
+              if (useNCP) {
+                double ncp[numberOfVariables];
+                solver.nonConservativeProduct(
+                    lQi + idx_lQi(j, k, l, i, 0),
+                    gradQCur + idx_gradQ(j, k, l, 0, 0), ncp);
+                for (int l = 0; l < numberOfVariables; l++) {
+                  S[l] -= ncp[l];
+                }
+              }
+
+              for (int m = 0; m < numberOfVariables; m++) {
+                rhs[idx_rhs(i, j, k, l, m)] += updateSize * S[m];
+                assertion5(std::isfinite(rhs[idx_rhs(i, j, k, l, m)]),
+                           rhs[idx_rhs(i, j, k, l, m)], m, S[m], dt, invDx);
+              }
+            }
+          }
+        }
+      }
+    }  // end time dof
+
+    // 3. Multiply with (K1)^(-1) to get the discrete time integral of the
+    // discrete Picard iteration
+    double sq_res = 0.0;
+    for (int i = 0; i < basisSize; i++) {
+      for (int j = 0; j < basisSize; j++) {
+        for (int k = 0; k < basisSize; k++) {
+          const double weight = kernels::gaussLegendreWeights[order][i] *
+                                kernels::gaussLegendreWeights[order][j] *
+                                kernels::gaussLegendreWeights[order][k];
+          const double iweight = 1.0 / weight;
+
+          // Matrix operation
+          for (int l = 0; l < basisSize; l++) {  // time
+            for (int m = 0; m < numberOfVariables; m++) {
+              double lQi_new = 0;
+              for (int n = 0; n < basisSize; n++) {  // time
+                lQi_new +=
+                    iweight * rhs[idx_rhs(n, i, j, k, m)] *
+                    kernels::iK1[order][l][n];  // note: iK1 is already the
+                                                // transposed inverse of K1
+
+                assertion3(std::isfinite(rhs[idx_rhs(n, i, j, k, m)]),
+                           rhs[idx_rhs(n, i, j, k, m)], dt, invDx);
+              }
+              sq_res += (lQi_new - lQi[idx_lQi(i, j, k, l, m)]) *
+                        (lQi_new - lQi[idx_lQi(i, j, k, l, m)]);
+              assertion3(std::isfinite(lQi[idx_lQi(i, j, k, l, m)]),
+                         idx_lQi(i, j, k, l, m), dt, invDx);
+              assertion3(std::isfinite(lQi_new), idx_lQi(i, j, k, l, m), dt,
+                         invDx);
+              lQi[idx_lQi(i, j, k, l, m)] = lQi_new;
+            }
+          }
+        }
+      }
+    }
+
+    // 4. Exit condition
+    if (!useMaxPicardIterations) {
+      constexpr double tol = 1e-7;
+      if (sq_res < tol * tol) {
+        break;
+      }
+
+      if (iter == MaxIterations) {  // No convergence after last iteration
+        static tarch::logging::Log _log("kernels::aderdg::generic::c");
+        logWarning("aderPicardLoopNonlinear(...)",
+                   "|res|^2=" << sq_res << " > |tol|^2=" << tol * tol
+                              << " after " << iter
+                              << " iterations. Solver seems not to "
+                                 "have converged properly within "
+                                 "maximum number of iteration steps");
+      }
+    }
+  }  // end iter
+
+  // Cleanup iff we use gradient flux
+  // In other cases, the pointer gradQCur is owned by the caller.
+  if (useViscousFlux) {
+    delete gradQCur;
+  }
+
+  return iter;
+}
+
+/*
+ *  Immediately compute the time - averaged space - time polynomials
+ *
+ *  We have to consider that we store parameters in lQi
+ *  and lQhi, and have to adjust the index accordingly.
+ */
+template <bool useSource, bool useFlux, bool useNCP, int numberOfVariables,
+          int numberOfParameters, int basisSize>
+void aderPredictorNonlinear(const double* lQi, const double* lFi, double* lQhi,
+                            double* lFhi_x, double* lFhi_y, double* lFhi_z,
+                            double* lShi) {
+  // Immediately compute the time - averaged space - time polynomials
+
+  constexpr int basisSize2 = basisSize * basisSize;
+  constexpr int basisSize3 = basisSize2 * basisSize;
+  constexpr int order = basisSize - 1;
+
+  constexpr int numberOfData = numberOfVariables + numberOfParameters;
+
+  idx5 idx_lQi(basisSize, basisSize, basisSize, basisSize, numberOfData);
+
+  idx6 idx_lFi(basisSize, basisSize, basisSize, basisSize, DIMENSIONS + 1,
+               numberOfVariables);
+
+  idx4 idx_lQhi(basisSize, basisSize, basisSize, numberOfData);
+
+  idx4 idx_lFhi(basisSize, basisSize, basisSize, numberOfVariables);
+  idx4 idx_lShi(basisSize, basisSize, basisSize, numberOfVariables);
+
+  std::fill_n(lQhi, basisSize3 * numberOfData, 0.0);
+
+  // if(useFlux) {
+  std::fill_n(lFhi_x, basisSize3 * numberOfVariables, 0.0);
+  std::fill_n(lFhi_y, basisSize3 * numberOfVariables, 0.0);
+  std::fill_n(lFhi_z, basisSize3 * numberOfVariables, 0.0);
+  //}
+  std::fill_n(lShi, basisSize3 * numberOfVariables, 0.0);
+
+  for (int i = 0; i < basisSize; i++) {
+    for (int j = 0; j < basisSize; j++) {
+      for (int k = 0; k < basisSize; k++) {
+        for (int l = 0; l < numberOfVariables; l++) {
+          // Matrix-Vector Products
+          for (int m = 0; m < basisSize; m++) {
+            if (useFlux) {
+              // Fortran: lFhi_x(:,k,j,i) = lFh(:,1,k,j,i,:) * wGPN(:)
+              lFhi_x[idx_lFhi(i, j, k, l)] +=
+                  lFi[idx_lFi(m, i, j, k, 0, l)] *
+                  kernels::gaussLegendreWeights[order][m];
+
+              // Fortran: lFhi_y(:,j,k,i) = lFh(:,2,:k,j,i,:) * wGPN(:)
+              lFhi_y[idx_lFhi(i, k, j, l)] +=
+                  lFi[idx_lFi(m, i, j, k, 1, l)] *
+                  kernels::gaussLegendreWeights[order][m];
+
+              // Fortran: lFhi_z(:,i,k,j) = lFh(:,3,k,j,i,:) * wGPN(:)
+              lFhi_z[idx_lFhi(j, k, i, l)] +=
+                  lFi[idx_lFi(m, i, j, k, 2, l)] *
+                  kernels::gaussLegendreWeights[order][m];
+            }
+            if (useSource || useNCP) {
+              // Fortran: lShi(:,k,j,i) = lSh(:,k,j,i,:) * wGPN(:)
+              lShi[idx_lShi(i, j, k, l)] +=
+                  lFi[idx_lFi(m, i, j, k, 3, l)] *
+                  kernels::gaussLegendreWeights[order][m];
+            }
+          }
+        }
+        for (int l = 0; l < numberOfData; l++) {
+          // Matrix-Vector Products
+          for (int m = 0; m < basisSize; m++) {
+            // Fortran: lQhi(:,k,j,i) = lQi(:,:,k,j,i) * wGPN(:)
+            lQhi[idx_lQhi(i, j, k, l)] +=
+                lQi[idx_lQi(i, j, k, m, l)] *
+                kernels::gaussLegendreWeights[order][m];
+          }
+        }
+      }
+    }
+  }
+}
+
+template <bool useFlux, bool useViscousFlux, int numberOfVariables,
+          int numberOfParameters, int basisSize>
+void aderExtrapolatorNonlinear(const double* lQhi, const double* lGradQi,
+                               const double* lFhi_x, const double* lFhi_y,
+                               const double* lFhi_z, double* lQhbnd,
+                               double* lGradQhbnd, double* lFhbnd) {
+  // Compute the boundary-extrapolated values for Q and F*n
+  constexpr int basisSize2 = basisSize * basisSize;
+  constexpr int order = basisSize - 1;
+
+  constexpr int numberOfData = numberOfVariables + numberOfParameters;
+
+  idx4 idx_lQhi(basisSize, basisSize, basisSize, numberOfData);
+  idx5 idx_lGradQi(basisSize, basisSize, basisSize, DIMENSIONS,
+                   numberOfVariables);
+  idx4 idx_lFhi(basisSize, basisSize, basisSize, numberOfVariables);
+
+  idx4 idx_lQhbnd(2 * DIMENSIONS, basisSize, basisSize, numberOfData);
+  idx5 idx_lGradQhbnd(2 * DIMENSIONS, basisSize, basisSize, DIMENSIONS,
+                      numberOfVariables);
+  idx4 idx_lFhbnd(2 * DIMENSIONS, basisSize, basisSize, numberOfVariables);
+
+  std::fill_n(lQhbnd, 2 * DIMENSIONS * basisSize2 * numberOfData, 0.0);
+  if (useViscousFlux) {
+    std::fill_n(lGradQhbnd, 2 * DIMENSIONS * basisSize2 * numberOfVariables * DIMENSIONS, 0.0);
+  }
+  // in princple, we should ignore the lFhbnd but we can also zero them out.
+  // zeroing them keeps CCZ4 GaugeWave stable for more time steps but not
+  // for long time.
+  // if(useFlux) {
+  std::fill_n(lFhbnd, 2 * DIMENSIONS * basisSize2 * numberOfVariables, 0.0);
+  //}
+
+  // x-direction: face 1 (left) and face 2 (right)
+  for (int i = 0; i < basisSize; i++) {
+    for (int j = 0; j < basisSize; j++) {
+      // Matrix-Vector Products
+      if (useFlux) {
+        for (int k = 0; k < numberOfVariables; k++) {
+          for (int l = 0; l < basisSize; l++) {
+            // Fortran: lFhbnd(:,j,i,1) = lFhi_x(:,:,j,i) * FLCoeff(:)
+            lFhbnd[idx_lFhbnd(0, i, j, k)] +=
+                lFhi_x[idx_lFhi(i, j, l, k)] * kernels::FLCoeff[order][l];
+
+            // Fortran: lFhbnd(:,j,i,2) = lFhi_x(:,:,j,i) * FRCoeff(:)
+            lFhbnd[idx_lFhbnd(1, i, j, k)] +=
+                lFhi_x[idx_lFhi(i, j, l, k)] * kernels::FRCoeff[order][l];
+          }
+        }
+      }
+      for (int k = 0; k < numberOfData; k++) {
+        for (int l = 0; l < basisSize; l++) {
+          // Fortran: lQhbnd(:,j,i,1) = lQhi(:,:,j,i) * FLCoeff(:)
+          lQhbnd[idx_lQhbnd(0, i, j, k)] +=
+              lQhi[idx_lQhi(i, j, l, k)] * kernels::FLCoeff[order][l];
+
+          // Fortran: lQhbnd(:,j,i,2) = lQhi(:,:,j,i) * FRCoeff(:)
+          lQhbnd[idx_lQhbnd(1, i, j, k)] +=
+              lQhi[idx_lQhi(i, j, l, k)] * kernels::FRCoeff[order][l];
+        }
+      }
+      if (useViscousFlux) {
+        for (int k = 0; k < numberOfVariables; k++) {
+          for (int l = 0; l < basisSize; l++) {
+            for (int dim = 0; dim < DIMENSIONS; dim++) {
+              lGradQhbnd[idx_lGradQhbnd(0, i, j, dim, k)] +=
+                  lGradQi[idx_lGradQi(i, j, l, dim, k)] *
+                  kernels::FLCoeff[order][l];
+
+              lGradQhbnd[idx_lGradQhbnd(1, i, j, dim, k)] +=
+                  lGradQi[idx_lGradQi(i, j, l, dim, k)] *
+                  kernels::FRCoeff[order][l];
+            }
+          }
+        }
+      }
+    }
+  }
+  // y-direction: face 3 (left) and face 4 (right)
+  for (int i = 0; i < basisSize; i++) {
+    for (int j = 0; j < basisSize; j++) {
+      if (useFlux) {
+        for (int k = 0; k < numberOfVariables; k++) {
+          // Matrix-Vector Products
+          for (int l = 0; l < basisSize; l++) {
+            // Fortran: lFhbnd(:,j,i,3) = lFhi_y(:,:,j,i) * FLCoeff(:)
+            lFhbnd[idx_lFhbnd(2, i, j, k)] +=
+                lFhi_y[idx_lFhi(i, j, l, k)] * kernels::FLCoeff[order][l];
+
+            // Fortran: lFhbnd(:,j,i,4) = lFhi_y(:,:,j,i) * FRCoeff(:)
+            lFhbnd[idx_lFhbnd(3, i, j, k)] +=
+                lFhi_y[idx_lFhi(i, j, l, k)] * kernels::FRCoeff[order][l];
+          }
+        }
+      }
+      for (int k = 0; k < numberOfData; k++) {
+        // Matrix-Vector Products
+        for (int l = 0; l < basisSize; l++) {
+          // Fortran: lQhbnd(:,j,i,3) = lQhi(:,j,:,i) * FLCoeff(:)
+          lQhbnd[idx_lQhbnd(2, i, j, k)] +=
+              lQhi[idx_lQhi(i, l, j, k)] * kernels::FLCoeff[order][l];
+
+          // Fortran: lQhbnd(:,j,i,4) = lQhi(:,j,:,i) * FRCoeff(:)
+          lQhbnd[idx_lQhbnd(3, i, j, k)] +=
+              lQhi[idx_lQhi(i, l, j, k)] * kernels::FRCoeff[order][l];
+        }
+      }
+      if (useViscousFlux) {
+        for (int k = 0; k < numberOfVariables; k++) {
+          for (int l = 0; l < basisSize; l++) {
+            for (int dim = 0; dim < DIMENSIONS; dim++) {
+              lGradQhbnd[idx_lGradQhbnd(2, i, j, dim, k)] +=
+                  lGradQi[idx_lGradQi(i, l, j, dim, k)] *
+                  kernels::FLCoeff[order][l];
+
+              lGradQhbnd[idx_lGradQhbnd(3, i, j, dim, k)] +=
+                  lGradQi[idx_lGradQi(i, l, j, dim, k)] *
+                  kernels::FRCoeff[order][l];
+            }
+          }
+        }
+      }
+    }
+  }
+  // z-direction: face 5 (left) and face 6 (right)
+  for (int i = 0; i < basisSize; i++) {
+    for (int j = 0; j < basisSize; j++) {
+      if (useFlux) {
+        for (int k = 0; k < numberOfVariables; k++) {
+          // Matrix-Vector Products
+          for (int l = 0; l < basisSize; l++) {
+            // Fortran: lFhbnd(:,j,i,5) = lFhi_z(:,:,j,i) * FLCoeff(:)
+            lFhbnd[idx_lFhbnd(4, i, j, k)] +=
+                lFhi_z[idx_lFhi(i, j, l, k)] * kernels::FLCoeff[order][l];
+
+            // Fortran: lFhbnd(:,j,i,6) = lFhi_z(:,:,j,i) * FRCoeff(:)
+            lFhbnd[idx_lFhbnd(5, i, j, k)] +=
+                lFhi_z[idx_lFhi(i, j, l, k)] * kernels::FRCoeff[order][l];
+          }
+        }
+      }
+      for (int k = 0; k < numberOfData; k++) {
+        // Matrix-Vector Products
+        for (int l = 0; l < basisSize; l++) {
+          // Fortran: lQhbnd(:,j,i,5) = lQhi(:,j,i,:) * FLCoeff(:)
+          lQhbnd[idx_lQhbnd(4, i, j, k)] +=
+              lQhi[idx_lQhi(l, i, j, k)] * kernels::FLCoeff[order][l];
+
+          // Fortran: lQhbnd(:,j,i,6) = lQhi(:,j,i,:) * FRCoeff(:)
+          lQhbnd[idx_lQhbnd(5, i, j, k)] +=
+              lQhi[idx_lQhi(l, i, j, k)] * kernels::FRCoeff[order][l];
+        }
+      }
+      if (useViscousFlux) {
+        for (int k = 0; k < numberOfVariables; k++) {
+          for (int l = 0; l < basisSize; l++) {
+            for (int dim = 0; dim < DIMENSIONS; dim++) {
+              lGradQhbnd[idx_lGradQhbnd(4, i, j, dim, k)] +=
+                  lGradQi[idx_lGradQi(l, i, j, dim, k)] *
+                  kernels::FLCoeff[order][l];
+
+              lGradQhbnd[idx_lGradQhbnd(5, i, j, dim, k)] +=
+                  lGradQi[idx_lGradQi(l, i, j, dim, k)] *
+                  kernels::FRCoeff[order][l];
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+template <bool useFlux, int numberOfVariables, int numberOfParameters,
+	  int basisSize>
+void aderTimeAveragingExtrapolatorNonlinear(const double* lQi,
+					    const double* lFi, double* lQhbnd,
+					    double* lFhbnd) {
+  // Compute the boundary-extrapolated values for Q and F*n
+
+  const int order = basisSize - 1;
+  const int basisSize2 = basisSize * basisSize;
+
+  constexpr int numberOfData = numberOfVariables + numberOfParameters;
+
+  idx5 idx_lQi(basisSize, basisSize, basisSize, basisSize,
+	       numberOfData);  // (z,y,x,t,var/param)
+  idx6 idx_lFi(basisSize, basisSize, basisSize, basisSize, DIMENSIONS + 1,
+               numberOfVariables);  // (t,z,y,x,flux/source,var)
+
+  idx4 idx_lQhbnd(2 * DIMENSIONS, basisSize, basisSize, numberOfData);
+  idx4 idx_lFhbnd(2 * DIMENSIONS, basisSize, basisSize, numberOfVariables);
+
+  std::fill_n(lQhbnd, 2 * DIMENSIONS * basisSize2 * numberOfData, 0.0);
+  std::fill_n(lFhbnd, 2 * DIMENSIONS * basisSize2 * numberOfVariables, 0.0);
+  // x-faces: (z,y,var/par)
+  // y-faces: (z,x,var/par)
+  // z-faces: (y,x,var/par)
+
+  for (int i = 0; i < basisSize; i++) {  // loop over time dof
+    // x-direction: face 0 (left) and face 1 (right)
+    for (int j = 0; j < basisSize; j++) {    // z
+      for (int k = 0; k < basisSize; k++) {  // y
+        // Matrix-Vector Products
+        if (useFlux) {
+          for (int l = 0; l < numberOfVariables; l++) {
+            for (int n = 0; n < basisSize; n++) {  // x
+              lFhbnd[idx_lFhbnd(0, j, k, l)] +=
+                  lFi[idx_lFi(i, j, k, n, 0, l)] * kernels::FLCoeff[order][n] *
+                  kernels::gaussLegendreWeights[order][i];
+
+              lFhbnd[idx_lFhbnd(1, j, k, l)] +=
+                  lFi[idx_lFi(i, j, k, n, 0, l)] * kernels::FRCoeff[order][n] *
+                  kernels::gaussLegendreWeights[order][i];
+            }
+          }
+        }
+        // Matrix-Vector Products
+        for (int l = 0; l < numberOfData; l++) {
+          for (int n = 0; n < basisSize; n++) {  // x
+            lQhbnd[idx_lQhbnd(0, j, k, l)] +=
+                lQi[idx_lQi(j, k, n, i, l)] * kernels::FLCoeff[order][n] *
+                kernels::gaussLegendreWeights[order][i];
+
+            lQhbnd[idx_lQhbnd(1, j, k, l)] +=
+                lQi[idx_lQi(j, k, n, i, l)] * kernels::FRCoeff[order][n] *
+                kernels::gaussLegendreWeights[order][i];
+          }
+        }
+      }
+    }
+
+    // y-direction: face 2 (front) and face 3 (back)
+    for (int j = 0; j < basisSize; j++) {    // z
+      for (int k = 0; k < basisSize; k++) {  // x
+        // Matrix-Vector Products
+        if (useFlux) {
+          for (int l = 0; l < numberOfVariables; l++) {
+            for (int n = 0; n < basisSize; n++) {  // y
+              lFhbnd[idx_lFhbnd(2, j, k, l)] +=
+                  lFi[idx_lFi(i, j, n, k, 1, l)] * kernels::FLCoeff[order][n] *
+                  kernels::gaussLegendreWeights[order][i];
+
+              lFhbnd[idx_lFhbnd(3, j, k, l)] +=
+                  lFi[idx_lFi(i, j, n, k, 1, l)] * kernels::FRCoeff[order][n] *
+                  kernels::gaussLegendreWeights[order][i];
+            }
+          }
+        }
+        // Matrix-Vector Products
+        for (int l = 0; l < numberOfData; l++) {
+          for (int n = 0; n < basisSize; n++) {  // y
+            lQhbnd[idx_lQhbnd(2, j, k, l)] +=
+                lQi[idx_lQi(j, n, k, i, l)] * kernels::FLCoeff[order][n] *
+                kernels::gaussLegendreWeights[order][i];
+
+            lQhbnd[idx_lQhbnd(3, j, k, l)] +=
+                lQi[idx_lQi(j, n, k, i, l)] * kernels::FRCoeff[order][n] *
+                kernels::gaussLegendreWeights[order][i];
+          }
+        }
+      }
+    }
+
+    // z-direction: face 4 (front) and face 5 (back)
+    for (int j = 0; j < basisSize; j++) {    // y
+      for (int k = 0; k < basisSize; k++) {  // x
+        // Matrix-Vector Products
+        if (useFlux) {
+          for (int l = 0; l < numberOfVariables; l++) {
+            for (int n = 0; n < basisSize; n++) {  // z
+              lFhbnd[idx_lFhbnd(4, j, k, l)] +=
+                  lFi[idx_lFi(i, n, j, k, 2, l)] * kernels::FLCoeff[order][n] *
+                  kernels::gaussLegendreWeights[order][i];
+
+              lFhbnd[idx_lFhbnd(5, j, k, l)] +=
+                  lFi[idx_lFi(i, n, j, k, 2, l)] * kernels::FRCoeff[order][n] *
+                  kernels::gaussLegendreWeights[order][i];
+            }
+          }
+        }
+        // Matrix-Vector Products
+        for (int l = 0; l < numberOfData; l++) {
+          for (int n = 0; n < basisSize; n++) {  // z
+            lQhbnd[idx_lQhbnd(4, j, k, l)] +=
+                lQi[idx_lQi(n, j, k, i, l)] * kernels::FLCoeff[order][n] *
+                kernels::gaussLegendreWeights[order][i];
+
+            lQhbnd[idx_lQhbnd(5, j, k, l)] +=
+                lQi[idx_lQi(n, j, k, i, l)] * kernels::FRCoeff[order][n] *
+                kernels::gaussLegendreWeights[order][i];
+          }
+        }
+      }
+    }
+  }
+}  // time dof loop
+
+}  // namespace
+
+template <bool useSource, bool useFlux, bool useViscousFlux, bool useNCP,
+          bool noTimeAveraging, typename SolverType>
+int spaceTimePredictorNonlinear(
+    SolverType& solver, double* lQhbnd, double* lGradQhbnd, double* lFhbnd,
+    double* lQi, double* rhs, double* lFi, double* gradQ, double* lQhi,
+    double* lFhi, const double* const luh,
+    const tarch::la::Vector<DIMENSIONS, double>& cellCenter,
+    const tarch::la::Vector<DIMENSIONS, double>& invDx, double t, double dt) {
+  constexpr int numberOfVariables = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int basisSize = SolverType::Order + 1;
+
+  const int iterations =
+      aderPicardLoopNonlinear<useSource, useFlux, useViscousFlux, useNCP, SolverType>(
+              solver, luh, t, dt, cellCenter, invDx, lQi, rhs, lFi, gradQ);
+
+  idx5 idx_gradQ(basisSize, basisSize, basisSize, DIMENSIONS,
+                 numberOfVariables);
+
+  if (noTimeAveraging) {
+    // TODO(Lukas) what shall we do for this case?
+    assert(false);
+    aderTimeAveragingExtrapolatorNonlinear<useFlux, numberOfVariables, numberOfParameters, basisSize>(
+        lQi, lFi, lQhbnd, lFhbnd);
+  } else {
+    constexpr int basisSize2 = basisSize * basisSize;
+    constexpr int basisSize3 = basisSize2 * basisSize;
+
+    // Note: gradQ is already time-averaged!
+    aderPredictorNonlinear<useSource, useFlux, useNCP, numberOfVariables, numberOfParameters, basisSize>(
+        lQi, lFi, lQhi,
+        &lFhi[0 * basisSize3 * numberOfVariables],  // lFhi_x
+        &lFhi[1 * basisSize3 * numberOfVariables],  // lFhi_y
+        &lFhi[2 * basisSize3 * numberOfVariables],  // lFhi_z
+        &lFhi[3 * basisSize3 * numberOfVariables]   // lShi
+    );
+
+    aderExtrapolatorNonlinear<useFlux, useViscousFlux, numberOfVariables,
+                              numberOfParameters, basisSize>(
+        lQhi, gradQ,
+        &lFhi[0 * basisSize3 * numberOfVariables],  // lFhi_x
+        &lFhi[1 * basisSize3 * numberOfVariables],  // lFhi_y
+        &lFhi[2 * basisSize3 * numberOfVariables],  // lFhi_z
+        lQhbnd, lGradQhbnd, lFhbnd);
+
+  }
+
+  return iterations;
+}
+
+}  // namespace c
+}  // namespace generic
+}  // namespace aderdg
+}  // namespace kernels
+
+#endif  // DIMENSIONS == 3

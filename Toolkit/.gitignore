@@ -1,0 +1,7 @@
+dependencies
+
+attr
+jinja2
+jsonschema
+markupsafe
+pyrsistent

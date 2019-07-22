@@ -1,0 +1,193 @@
+#ifndef __KERNELS_STANDALONE_RK_INTEGRATOR_SVEN__
+#define __KERNELS_STANDALONE_RK_INTEGRATOR_SVEN__
+
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon 
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/
+
+#include <algorithm>
+
+#include "kernels/DGMatrices.h"
+#include "kernels/GaussLegendreQuadrature.h"
+#include "kernels/KernelUtils.h"
+#include "kernels/aderdg/generic/c/computeGradients.cpph"
+
+#include "tarch/la/Vector.h"
+
+namespace kernels {
+namespace aderdg {
+namespace generic {
+namespace c {
+
+/**
+ * This is a small standalone RungeKutta Integrator suitable for integrating a
+ * single DG cell in time without boundary exchange to another cell.
+ * 
+ * Being that, it is no further integrated into ExaHyPE, i.e. it cannot serve as an alternative
+ * to the SpaceTimePredictor or similar.
+ * 
+ * The intended usage is in case of Boundary Conditions where you want to solve another PDE
+ * in the boundary cells.
+ * 
+ * This scheme here exploits the features of DG for derivatives (and thus avoids any need
+ * for ghost cells) and uses RK for time integration. We could call it a "RKDG" code.
+ * 
+ * It is actually inspired by the ToyRKFD code by Michael Dumbser and was written by
+ * SvenK for CCZ4 radiative Boundary Conditions.
+ **/
+template <typename SolverType>
+struct RungeKuttaIntegrator {
+	using dvec = tarch::la::Vector<DIMENSIONS,double>;
+	
+	static constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+	static constexpr int numberOfParameters = SolverType::NumberOfParameters;
+	static constexpr int numberOfData       = numberOfVariables+numberOfParameters;
+	static constexpr int order              = SolverType::Order;
+	static constexpr int basisSize          = order+1;
+	static constexpr int basisX             = basisSize;
+	static constexpr int basisY             = basisSize;
+	static constexpr int basisZ             = DIMENSIONS==3 ? basisSize : 1;
+	static constexpr int patchSize          = basisX*basisY*basisZ*numberOfData;
+	
+	// We assume it const here which means that rightHandSide() must has a const qualifier.
+	// You can remove the const if you want, then also remove it in the constructor
+	const SolverType& solver;
+	
+	// Cell geometry means the spatial computational domain for this integration
+	const dvec &offsetOfPatch, &sizeOfPatch;
+	
+	// Do not mix this up with a CFL number anywhere in ExaHyPE. Here, it is solely for
+	// the RungeKutta timestep determination.
+	const double cfl_number;
+
+	RungeKuttaIntegrator(const SolverType& solver, const dvec& offsetOfPatch, const dvec& sizeOfPatch, double cfl_number)
+		: solver(solver), offsetOfPatch(offsetOfPatch), sizeOfPatch(sizeOfPatch), cfl_number(cfl_number) {}
+
+	void coordinate(double* const pos, const int i) const {
+		pos[i] = offsetOfPatch[i] + sizeOfPatch[i] * (kernels::gaussLegendreNodes[order][i] - 0.5);
+	}
+		
+	// Determine the RHS of the equation partial_t Q = S. We used to call this
+	// "FusedSource" in ExaHyPE. Derivatives will be computed here in the DG fashion.
+	void rhs(double* dudtPatch, const double* const QPatch) const {
+		double gradQ[patchSize];
+		kernels::aderdg::generic::c::computeGradQ<SolverType>(gradQ, QPatch, sizeOfPatch);
+
+		const idx5 idx_gradQ(basisX, basisY, basisZ, DIMENSIONS, numberOfVariables);
+		const idx4 idx_u(basisX, basisY, basisZ, numberOfVariables);
+
+		double pos[DIMENSIONS];
+		
+		for (int iz = 0; iz < basisZ; iz++)
+		for (int iy = 0; iy < basisY; iy++)
+		for (int ix = 0; ix < basisX; ix++) {
+			for(int id=0; id<DIMENSIONS; id++) coordinate(pos, id);
+
+			// I want to pass the position here, so I do not fall back to an ExaHyPE
+			// standard signature such as solver.fusedSource() but use something custom.
+			solver.rightHandSide(
+				pos,
+				QPatch + idx_u(iz,iy,ix,0),
+				gradQ + idx_gradQ(iz,iy,ix,0,0),
+				dudtPatch + idx_u(iz,iy,ix,0)
+			);
+		} // spatial loop
+	} // rhs()
+	
+	double largest_eigenvalue(const double* const QPatch) const {
+		const idx4 idx_u(basisX, basisY, basisZ, numberOfVariables);
+		double Largest;
+		double pos[DIMENSIONS];
+		
+		for (int iz = 0; iz < basisZ; iz++)
+		for (int iy = 0; iy < basisY; iy++)
+		for (int ix = 0; ix < basisX; ix++) {
+ 			for(int id=0; id<DIMENSIONS; id++) coordinate(pos, id);
+			double Lambda[numberOfVariables];
+			
+			solver.eigenvalues(pos, QPatch + idx_u(iz,iy,ix,0), Lambda);
+			for(int k=0; k<numberOfVariables; k++) {
+				if(Lambda[k]>Largest) Largest = Lambda[k];
+			}
+		}
+		
+		return Largest;
+	}
+	
+	// Gets the largest value of the gaussLegendreNodes seperation. The attemp is slow and dumb.
+	double largest_dx() const {
+		double Largest;
+		
+		for (int d = 0; d < DIMENSIONS; d++)
+		for (int i = 0; i < basisSize; i++) {
+			double dx = sizeOfPatch[d] * kernels::gaussLegendreNodes[order][i];
+			if(dx > Largest) Largest = dx;
+		}
+		
+		return Largest;
+	}
+
+	void Integrate(double time, double target_time, double* QPatch) const {
+		do {
+			// This timestep is hopefully very conservative
+			double dt = cfl_number / largest_eigenvalue(QPatch) / largest_dx();
+			dt = std::min(dt, target_time - time);
+			
+			// RK3 for the time being:
+			double k[3][patchSize], QPatch1[patchSize], QPatch2[patchSize];
+		
+			rhs(k[0], QPatch);
+			for(int i=0; i<patchSize; i++) QPatch1[i] = QPatch[i] + 0.5*dt*k[0][i];
+			rhs(k[1], QPatch1);
+			for(int i=0; i<patchSize; i++) QPatch2[i] = QPatch[i] - 1.0*dt*k[0][i] + 2.0*dt*k[1][i];
+			rhs(k[2], QPatch2);
+			
+			for(int i=0; i<patchSize; i++) QPatch[i] += dt/6.0*(k[0][i] + 4.0*k[1][i] + 1.0*k[2][i]);
+			
+			time += dt;
+		} while (time < target_time);
+	}
+}; // end of struct RungeKuttaIntegrator
+
+/* Other Runge Kutta schemes, could easily be supported:
+
+        CASE(1) 
+            ! Explicit Euler 
+            CALL Lh(k1,uh)                    
+            uh = uh + dt*k1 
+        CASE(2) 
+            ! RK2 scheme
+            CALL Lh(k1,uh)
+            CALL Lh(k2,uh+dt*k1) 
+            uh = uh + dt/2.0*(k1+k2)          
+        CASE(3) 
+            ! Kutta's third order scheme 
+            CALL Lh(k1,uh) 
+            CALL Lh(k2,uh+0.5*dt*k1) 
+            CALL Lh(k3,uh-1.0*dt*k1+2.0*dt*k2) 
+            uh = uh + dt/6.0*( k1 + 4.0*k2 + 1.0*k3  ) 
+        CASE(4)             
+            ! Classical RK4 scheme 
+            CALL Lh(k1,uh) 
+            CALL Lh(k2,uh+0.5*dt*k1) 
+            CALL Lh(k3,uh+0.5*dt*k2) 
+            CALL Lh(k4,uh+1.0*dt*k3) 
+            uh = uh + dt/6.0*( k1 + 2.0*k2 + 2.0*k3 + k4 ) 
+*/
+
+
+} // c
+} // generic
+} // aderdg
+} // kernels
+
+#endif /* __KERNELS_STANDALONE_RK_INTEGRATOR_SVEN__ */

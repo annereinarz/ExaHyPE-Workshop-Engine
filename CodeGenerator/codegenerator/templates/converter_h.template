@@ -1,0 +1,79 @@
+{# /**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/ #}
+
+#ifndef EXAHYPE_{{guardNamespace}}_CONVERTER_H_
+#define EXAHYPE_{{guardNamespace}}_CONVERTER_H_
+#include <cstring>
+
+#include "kernels/KernelUtils.h"
+
+{% for namespaceName in codeNamespaceList %}
+namespace {{namespaceName}} {
+{% endfor %}
+namespace converter {
+
+  constexpr int getLduhGenArraySize()    { return {{(nDof**nDim)*nVar}};}
+  constexpr int getLduhOptArraySize()    { return {{(nDof**nDim)*nVarPad}};}
+
+  constexpr int getQhbndGenArraySize()   { return {{2 * nDim * nDof * nDof3D * nData}};}
+  constexpr int getQhbndOptArraySize()   { return {{2 * nDim * nDof * nDof3D * nDataPad}};}
+  
+  constexpr int getFhbndGenArraySize()   { return {{2 * nDim * nDof * nDof3D * nVar}};}
+  constexpr int getFhbndOptArraySize()   { return {{2 * nDim * nDof * nDof3D * nVarPad}};}
+
+  constexpr int getQFaceGenArraySize()   { return {{nDof * nDof3D * nData}};}
+  constexpr int getQFaceOptArraySize()   { return {{nDof * nDof3D * nDataPad}};}
+  
+  constexpr int getFFaceGenArraySize()   { return {{nDof * nDof3D * nVar}};}
+  constexpr int getFFaceOptArraySize()   { return {{nDof * nDof3D * nVarPad}};}
+
+  constexpr int getQhiGenArraySize()     { return {{(nDof ** nDim) * nData}};}
+  constexpr int getQhiOptArraySize()     { return {{(nDof ** nDim) * nDataPad}};}
+  
+  constexpr int getFhiGenArraySize()     { return {{(nDof ** nDim) * nVar * (nDim+1)}};}
+  constexpr int getFhiOptArraySize()     { return {{(nDof ** nDim) * nVarPad * (nDim+1)}};}
+  
+  constexpr int getPSiGenArraySize()     { return {{(nDof+1) * (nDof ** nDim) * nVar}};}
+  constexpr int getPSiOptArraySize()     { return {{(nDof+1) * (nDof ** nDim) * nVarPad}};}
+
+
+  void Qhbnd_optimised2generic(const double* const opt, double* gen);
+  void Qhbnd_generic2optimised(const double* const gen, double* opt);
+  
+  void Fhbnd_optimised2generic(const double* const opt, double* gen);
+  void Fhbnd_generic2optimised(const double* const gen, double* opt);
+  
+  void QFace_optimised2generic(const double* const opt, double* gen);
+  void QFace_generic2optimised(const double* const gen, double* opt);
+  
+  void FFace_optimised2generic(const double* const opt, double* gen);
+  void FFace_generic2optimised(const double* const gen, double* opt);
+
+  void Qhi_optimised2generic(const double* const opt, double* gen);
+  void Qhi_generic2optimised(const double* const gen, double* opt);
+  
+  void Fhi_optimised2generic(const double* const opt, double* gen);
+  void Fhi_generic2optimised(const double* const gen, double* opt);
+    
+  void PSi_optimised2generic(const double* const opt, double* gen);
+  void PSi_generic2optimised(const double* const gen, double* opt);
+  
+  void Lduh_optimised2generic(const double* const opt, double* gen);
+  void Lduh_generic2optimised(const double* const gen, double* opt);
+}
+{% for namespaceName in codeNamespaceList %}
+}
+{% endfor %}
+
+#endif //EXAHYPE_{{guardNamespace}}_CONVERTER_H_
+

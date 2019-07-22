@@ -1,0 +1,55 @@
+/**
+ * This file collects signatures for former direct API methods for the ADERDG
+ * scheme which now can be derived from different quantities.
+ *
+ **/
+
+#include <memory>
+#include <algorithm>
+#include "kernels/KernelUtils.h"
+
+namespace kernels {
+
+/**
+ * The fusedSource is since April the successor of S = algebraicSource - NCP.
+ * Actually the same definition holds for the FV kernels.
+ **/
+template <bool useSource, bool useNCP, typename SolverType>
+void fusedSource(SolverType& solver, const double* const Q, const double* const gradQ, double* S) {
+	constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+	if(useSource) {
+		solver.algebraicSource(Q, S);
+	} else {
+		std::fill_n(S, numberOfVariables, 0.0);
+	}
+	if(useNCP) {
+		double ncp[numberOfVariables];
+		solver.nonConservativeProduct(Q, gradQ, ncp);
+		for(int l=0; l<numberOfVariables; l++) {
+			S[l] -= ncp[l];
+		}
+	}
+}
+
+/**
+ * We can compute the coefficientMatrix B in B(Q)*Nabla Q from the NCP function itself.
+ **/
+template <typename SolverType>
+void coefficientMatrix(SolverType& solver, const double* const Q,const int d,double* Bn) {
+	constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+	constexpr int numberOfParameters  = SolverType::NumberOfParameters;
+
+	// By default, if not given, fallback to nonConservativeProduct
+	kernels::idx2 idx_gradQ(DIMENSIONS, numberOfVariables+numberOfParameters);
+	kernels::idx2 idx_Bn(numberOfVariables, numberOfVariables);
+	
+	// build gradQ from normal vector and fill up Bn.
+	double gradQ[DIMENSIONS * (numberOfVariables + numberOfParameters)] = {0.0};
+	for(int i=0; i<numberOfVariables; i++) {
+		std::fill_n(gradQ, idx_gradQ.size, 0.0);
+		gradQ[idx_gradQ(d, i)] = 1.0;
+		solver.nonConservativeProduct(Q, gradQ, Bn + idx_Bn(i,0));
+	}
+}
+
+} // ns kernels

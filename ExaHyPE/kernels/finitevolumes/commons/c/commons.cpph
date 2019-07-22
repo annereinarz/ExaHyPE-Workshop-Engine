@@ -1,0 +1,1028 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ *
+ * @authors: Dominic E. Charrier
+ **/
+
+#include "kernels/KernelUtils.h" // idx classes
+#include <algorithm> // transform, fill_n
+
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+#if DIMENSIONS==2
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+template <typename SolverType, bool useViscousFlux>
+double kernels::finitevolumes::commons::c::stableTimeStepSize(
+    SolverType& solver,
+    const double* const luh,
+    const tarch::la::Vector<DIMENSIONS, double>& dx) {
+  constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int numberOfData       = numberOfVariables+numberOfParameters;
+  constexpr int patchSize          = SolverType::PatchSize;
+  constexpr int ghostLayerWidth    = SolverType::GhostLayerWidth;
+  constexpr int patchBegin         = ghostLayerWidth;
+  constexpr int patchEnd           = patchBegin+patchSize;
+  constexpr double cflFactor       = SolverType::CFL;
+
+  kernels::idx3 idx(patchSize+2*ghostLayerWidth, patchSize+2*ghostLayerWidth, numberOfData);
+
+  double lambda[numberOfVariables] = {0.0};
+  double dt_max_stable = std::numeric_limits<double>::max();
+  for (int j = patchBegin; j < patchEnd; j++) {
+      for (int k = patchBegin; k < patchEnd; k++) {
+          // x
+          solver.eigenvalues(luh + idx(j, k, 0), 0, lambda);
+          std::transform(lambda, lambda + numberOfVariables, lambda,
+                  std::abs<double>);
+          double s_max_x = *std::max_element(lambda, lambda + numberOfVariables);
+
+          if(useViscousFlux){
+              solver.viscousEigenvalues(luh + idx(j, k, 0), 0, lambda);
+              std::transform(lambda, lambda + numberOfVariables, lambda,
+                      std::abs<double>);
+              const double s_max_x_vis = *std::max_element(lambda, lambda + numberOfVariables);
+              s_max_x += (2.0/(dx[0]/patchSize)) * s_max_x_vis;
+          }
+
+          dt_max_stable = std::min(
+                  dt_max_stable, (cflFactor * (dx[0]/patchSize)) / (DIMENSIONS  * s_max_x));
+
+          // y
+          solver.eigenvalues(luh + idx(j, k, 0), 1, lambda);
+          std::transform(lambda, lambda + numberOfVariables, lambda,
+                  std::abs<double>);
+          double s_max_y = *std::max_element(lambda, lambda + numberOfVariables);
+
+          if(useViscousFlux){
+              solver.viscousEigenvalues(luh + idx(j, k, 0), 1, lambda);
+              std::transform(lambda, lambda + numberOfVariables, lambda,
+                      std::abs<double>);
+              const double s_max_y_vis = *std::max_element(lambda, lambda + numberOfVariables);
+              s_max_y += (2.0/(dx[1]/patchSize)) * s_max_y_vis;
+          }
+
+          dt_max_stable = std::min(
+                  dt_max_stable, (cflFactor * (dx[1]/patchSize)) / (DIMENSIONS  * s_max_y));
+      }
+  }
+  assertion( tarch::la::greater(dt_max_stable,0.0) );
+  return dt_max_stable;
+}
+
+template <typename SolverType>
+void kernels::finitevolumes::commons::c::solutionAdjustment(
+    SolverType& solver,
+    double* luh, const tarch::la::Vector<DIMENSIONS, double>& center,
+    const tarch::la::Vector<DIMENSIONS, double>& dx, const double t,const double dt) {
+  constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int numberOfData       = numberOfVariables+numberOfParameters;
+  constexpr int patchSize          = SolverType::PatchSize;
+  constexpr int ghostLayerWidth    = SolverType::GhostLayerWidth;
+  constexpr int patchBegin         = ghostLayerWidth;
+  constexpr int patchEnd           = patchBegin+patchSize;
+
+  double x[DIMENSIONS];
+  kernels::idx3 idx(patchSize+2*ghostLayerWidth,patchSize+2*ghostLayerWidth,numberOfData);
+
+  for (int j = patchBegin; j < patchEnd; j++) {  // loop over dof
+    const double qs = (2.0*(j-patchBegin)+1.0)/(2.0*patchSize); //linspace;
+
+    for (int i = patchBegin; i < patchEnd; i++) {
+      const double qr = (2.0*(i-patchBegin)+1.0)/(2.0*patchSize); //linspace;
+      x[0] = center[0] + dx[0] * (qr - 0.5);
+      x[1] = center[1] + dx[1] * (qs - 0.5);
+
+      // read initial condition
+      solver.adjustSolution(x, t, dt, luh+idx(j,i,0));
+    }
+  }
+}
+
+template <typename SolverType>
+void kernels::finitevolumes::commons::c::boundaryLayerExtraction(
+    SolverType& solver,
+    double* luhbnd,const double* luh,
+    const tarch::la::Vector<DIMENSIONS,int>& boundaryPosition) {
+  constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int numberOfData       = numberOfVariables+numberOfParameters;
+  constexpr int patchSize          = SolverType::PatchSize;
+  constexpr int ghostLayerWidth    = SolverType::GhostLayerWidth;
+  constexpr int patchBegin         = ghostLayerWidth;
+  constexpr int patchEnd           = patchBegin+patchSize;
+
+  // 1D patch values:
+  // |G|G|U0|U1|..|UN|G|G|,
+  // G: ghost value, Ui: local solution value
+  kernels::idx3 idx(patchSize+2*ghostLayerWidth, // y
+      patchSize+2*ghostLayerWidth, // x
+      numberOfData);
+
+  kernels::idx3 idx_bnd_x(patchSize,ghostLayerWidth,numberOfData); // x,x; x,x; x,x; ... x,x;
+  kernels::idx3 idx_bnd_y(ghostLayerWidth,patchSize,numberOfData); // x,x,x,x,x,...,x; x,x,x,x,x,...,x;
+
+  // TODO: Depending on the memory layout, we can remove the loops
+  // and use larger strides for one of the coordinate directions.
+
+  if (boundaryPosition[0] == -1) {
+    // assertion: boundaryPosition[1] == 0;
+    for (int i=patchBegin; i<patchEnd; ++i) {
+      for (int k=0; k<ghostLayerWidth; ++k) {
+        // first layer
+        std::copy_n(
+            luh+idx(i,patchBegin+k,0),
+            numberOfData,
+            luhbnd+idx_bnd_x(i-patchBegin,k,0));
+      }
+    }
+  }
+  if (boundaryPosition[0] == +1) {
+    // assertion: boundaryPosition[1] == 0;
+    for (int i=patchBegin; i<patchEnd; ++i) {
+      for (int k=0; k<ghostLayerWidth; ++k) {
+        // first layer
+        std::copy_n(
+            luh+idx(i,patchEnd-ghostLayerWidth+k,0),
+            numberOfData,
+            luhbnd+idx_bnd_x(i-patchBegin,k,0));
+      }
+    }
+  }
+
+  if (boundaryPosition[1] == -1) {
+    // assertion: boundaryPosition[0] == 0;
+    for (int i=patchBegin; i<patchEnd; ++i) {
+      for (int k=0; k<ghostLayerWidth; ++k) {
+        std::copy_n(
+            luh+idx(patchBegin+k,i,0),
+            numberOfData,
+            luhbnd+idx_bnd_y(k,i-patchBegin,0));
+      }
+    }
+  }
+  if (boundaryPosition[1] == +1) {
+    // assertion: boundaryPosition[0] == 0;
+    for (int i=patchBegin; i<patchEnd; ++i) {
+      for (int k=0; k<ghostLayerWidth; ++k) {
+        std::copy_n(
+            luh+idx(patchEnd-ghostLayerWidth+k,i,0),
+            numberOfData,
+            luhbnd+idx_bnd_y(k,i-patchBegin,0));
+      }
+    }
+  }
+}
+
+template <typename SolverType>
+void kernels::finitevolumes::commons::c::boundaryConditions(SolverType& solver,
+    double* stateOut,
+    const double* const stateIn,
+    const tarch::la::Vector<DIMENSIONS, double>& cellCentre,
+    const tarch::la::Vector<DIMENSIONS,double>& cellSize,
+    const double t,const double dt,
+    const int faceIndex,
+    const int normalNonZero) {
+  constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int numberOfData       = numberOfVariables+numberOfParameters;
+  constexpr int patchSize          = SolverType::PatchSize;
+  constexpr int ghostLayerWidth    = SolverType::GhostLayerWidth;
+
+  const int orientation = faceIndex % 2; // orientation=1 if face normal follows the direction
+  const int direction   = (faceIndex-orientation) / 2;
+
+  double xOutside[DIMENSIONS]; // centre of the outside FV subcell
+
+  // x-left
+  if (direction==0 && orientation==0) {
+    kernels::idx3 idx_bnd_x(patchSize,ghostLayerWidth,numberOfData);
+
+    for (int k = 0; k < ghostLayerWidth; ++k) {
+      const int K=ghostLayerWidth-k-1; // mirror index k as k=0 is (in general) further away from patch than k=ghostLayerWidth-1
+      xOutside[0] = cellCentre[0] - 0.5 * cellSize[0] * ( 1.0 + (1.0+2.0*K)/patchSize ); // !!! be aware of sign in front of 0.5 and big "K"
+
+      for (int i = 0; i < patchSize; ++i) {
+        const double q = (2.0*i+1.0)/(2.0*patchSize); //linspace
+        xOutside[1] = cellCentre[1] + cellSize[1] * (q - 0.5);
+
+        solver.boundaryValues(xOutside,t,dt,faceIndex,normalNonZero, // mirrors stateIn DoF at boundary
+            stateIn + idx_bnd_x(i,K,0),stateOut + idx_bnd_x(i,k,0));
+      }
+    }
+  }
+  // x-right
+  else if (direction==0 && orientation==1) {
+    kernels::idx3 idx_bnd_x(patchSize,ghostLayerWidth,numberOfData);
+
+    for (int k = 0; k < ghostLayerWidth; ++k) {
+      xOutside[0] = cellCentre[0] + 0.5 * cellSize[0] * ( 1.0 + (1.0+2.0*k)/patchSize ); // !!! be aware of sign in front of 0.5 and small "k"
+
+      for (int i = 0; i < patchSize; ++i) {
+        const double q = (2.0*i+1.0)/(2.0*patchSize); //linspace
+        xOutside[1] = cellCentre[1] + cellSize[1] * (q - 0.5);
+
+        const int K=ghostLayerWidth-k-1; // mirror
+        solver.boundaryValues(xOutside,t,dt,faceIndex,normalNonZero, // mirrors stateIn DoF at boundary
+            stateIn + idx_bnd_x(i,K,0),stateOut + idx_bnd_x(i,k,0));
+      }
+    }
+  }
+  // y-left
+  else if (direction==1 && orientation==0) {
+    kernels::idx3 idx_bnd_y(ghostLayerWidth,patchSize,numberOfData);
+
+    for (int k = 0; k < ghostLayerWidth; ++k) {
+      const int K=ghostLayerWidth-k-1; // mirror index k as k=0 is (in general) further away from patch than k=ghostLayerWidth-1
+      xOutside[1] = cellCentre[1] - 0.5 * cellSize[1] * ( 1.0 + (1.0+2.0*K)/patchSize ); // !!! be aware of sign in front of 0.5 and big "K"
+
+      for (int i = 0; i < patchSize; ++i) {
+        const double q = (2.0*i+1.0)/(2.0*patchSize); //linspace
+        xOutside[0] = cellCentre[0] + cellSize[0] * (q - 0.5);
+
+        solver.boundaryValues(xOutside,t,dt,faceIndex,normalNonZero, // mirrors stateIn DoF at boundary
+            stateIn + idx_bnd_y(K,i,0),stateOut + idx_bnd_y(k,i,0));
+      }
+    }
+  }
+  // y-right
+  else if (direction==1 && orientation==1) {
+    kernels::idx3 idx_bnd_y(ghostLayerWidth,patchSize,numberOfData);
+
+    for (int k = 0; k < ghostLayerWidth; ++k) {
+      xOutside[1] = cellCentre[1] + 0.5 * cellSize[1] * ( 1.0 + (1.0+2.0*k)/patchSize ); // !!! be aware of sign in front of 0.5 and small "k"
+
+      for (int i = 0; i < patchSize; ++i) {
+        const double q = (2.0*i+1.0)/(2.0*patchSize); //linspace
+        xOutside[0] = cellCentre[0] + cellSize[0] * (q - 0.5);
+
+        const int K=ghostLayerWidth-k-1; // mirror
+        solver.boundaryValues(xOutside,t,dt,faceIndex,normalNonZero, // mirrors stateIn DoF at boundary
+            stateIn + idx_bnd_y(K,i,0),stateOut + idx_bnd_y(k,i,0));
+      }
+    }
+  } else {
+    assertionMsg(false,"direction must be either 0 or 1.");
+  }
+}
+
+template <typename SolverType>
+void kernels::finitevolumes::commons::c::ghostLayerFillingAtBoundary(
+    SolverType& solver,
+    double* luh,const double* luhbnd,
+    const tarch::la::Vector<DIMENSIONS,int>& boundaryPosition) {
+  constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int patchSize          = SolverType::PatchSize;
+  constexpr int ghostLayerWidth    = SolverType::GhostLayerWidth;
+
+  constexpr int numberOfData = numberOfVariables+numberOfParameters;
+
+  constexpr int patchBegin      = ghostLayerWidth;
+  constexpr int patchEnd        = patchBegin+patchSize;
+  kernels::idx3 idx(patchSize+2*ghostLayerWidth, // y
+      patchSize+2*ghostLayerWidth, // x
+      numberOfData);
+
+  kernels::idx3 idx_bnd_x(patchSize,ghostLayerWidth,numberOfData); // x,x; x,x; x,x; ... x,x;
+  kernels::idx3 idx_bnd_y(ghostLayerWidth,patchSize,numberOfData); // x,x,x,x,x,...,x; x,x,x,x,x,...,x;
+
+  // TODO: Depending on the memory layout, we can remove the loop,
+  // and use larger strides for one of the coordinate directions.
+
+  if (boundaryPosition[0] == -1) {
+    // assertion: boundaryPosition[1] == 0;
+    for (int i=patchBegin; i<patchEnd; ++i) {
+      for (int k=0; k<ghostLayerWidth; ++k) {
+        std::copy_n(
+            luhbnd+idx_bnd_x(i-patchBegin,k,0), // (iy,ix,ivar)
+            numberOfData,
+            luh+idx(i,k,0));
+      }
+    }
+  }
+  if (boundaryPosition[0] == +1) {
+    // assertion: boundaryPosition[1] == 0;
+    for (int i=patchBegin; i<patchEnd; ++i) {
+      for (int k=0; k<ghostLayerWidth; ++k) {
+        std::copy_n(
+            luhbnd+idx_bnd_x(i-patchBegin,k,0),
+            numberOfData,
+            luh+idx(i,patchEnd+k,0));
+      }
+    }
+  }
+
+  if (boundaryPosition[1] == -1) {
+    // assertion: boundaryPosition[0] == 0;
+    for (int i=patchBegin; i<patchEnd; ++i) {
+      for (int k=0; k<ghostLayerWidth; ++k) {
+        std::copy_n(
+            luhbnd+idx_bnd_y(k,i-patchBegin,0),
+            numberOfData,
+            luh+idx(k,i,0));
+      }
+    }
+  }
+  if (boundaryPosition[1] == +1) {
+    // assertion: boundaryPosition[0] == 0;
+    for (int i=patchBegin; i<patchEnd; ++i) {
+      for (int k=0; k<ghostLayerWidth; ++k) {
+        std::copy_n(
+            luhbnd+idx_bnd_y(k,i-patchBegin,0),
+            numberOfData,
+            luh+idx(patchEnd+k,i,0));
+      }
+    }
+  }
+}
+
+template <typename SolverType>
+void kernels::finitevolumes::commons::c::ghostLayerFilling(
+    SolverType& solver,
+    double* luh,const double* luhNeighbour,
+    const tarch::la::Vector<DIMENSIONS,int>& neighbourPosition) {
+  constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int numberOfData       = numberOfVariables+numberOfParameters;
+  constexpr int patchSize          = SolverType::PatchSize;
+  constexpr int ghostLayerWidth    = SolverType::GhostLayerWidth;
+  constexpr int patchBegin         = ghostLayerWidth;
+  constexpr int patchEnd           = patchBegin+patchSize; // exclusive
+
+  kernels::idx3 idx(patchSize+2*ghostLayerWidth, // y
+      patchSize+2*ghostLayerWidth, // x
+      numberOfData);
+
+  // TODO: Depending on the memory layout, we can remove the loop,
+  // and use larger strides for one of the coordinate directions.
+
+  if (neighbourPosition[0] == -1) {
+    // assertion: neighbourPosition[1] == 0;
+    for (int i=patchBegin; i<patchEnd; ++i) {
+      for (int k=0; k<ghostLayerWidth; ++k) {
+        std::copy_n(
+            luhNeighbour+idx(i,patchEnd-ghostLayerWidth+k,0),
+            numberOfData,
+            luh+idx(i,k,0));
+      }
+    }
+  }
+  if (neighbourPosition[0] == +1) {
+    // assertion: neighbourPosition[1] == 0;
+    for (int i=patchBegin; i<patchEnd; ++i) {
+      for (int k=0; k<ghostLayerWidth; ++k) {
+        std::copy_n(
+            luhNeighbour+idx(i,patchBegin+k,0),
+            numberOfData,
+            luh+idx(i,patchEnd+k,0));
+      }
+    }
+  }
+
+  if (neighbourPosition[1] == -1) {
+    // assertion: neighbourPosition[0] == 0;
+    for (int i=patchBegin; i<patchEnd; ++i) {
+      for (int k=0; k<ghostLayerWidth; ++k) {
+        std::copy_n(
+            luhNeighbour+idx(patchEnd-ghostLayerWidth+k,i,0),
+            numberOfData,
+            luh+idx(k,i,0));
+      }
+    }
+  }
+  if (neighbourPosition[1] == +1) {
+    // assertion: neighbourPosition[0] == 0;
+    for (int i=patchBegin; i<patchEnd; ++i) {
+      for (int k=0; k<ghostLayerWidth; ++k) {
+        std::copy_n(
+            luhNeighbour+idx(patchBegin+k,i,0),
+            numberOfData,
+            luh+idx(patchEnd+k,i,0));
+      }
+    }
+  }
+}
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+#elif DIMENSIONS==3
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+template <typename SolverType, bool useViscousFlux>
+double kernels::finitevolumes::commons::c::stableTimeStepSize(
+    SolverType& solver,
+    const double* const luh,
+    const tarch::la::Vector<DIMENSIONS, double>& dx) {
+  constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int numberOfData       = numberOfVariables+numberOfParameters;
+  constexpr int patchSize          = SolverType::PatchSize;
+  constexpr int ghostLayerWidth    = SolverType::GhostLayerWidth;
+  constexpr int patchBegin         = ghostLayerWidth;
+  constexpr int patchEnd           = patchBegin+patchSize;
+  constexpr double cflFactor       = SolverType::CFL;
+
+  kernels::idx4 idx(patchSize+2*ghostLayerWidth,
+      patchSize+2*ghostLayerWidth,
+      patchSize+2*ghostLayerWidth,numberOfData);
+
+  double lambda[numberOfVariables] = {0.0};
+  double dt_max_stable = std::numeric_limits<double>::max();
+
+  for (int i = patchBegin; i < patchEnd; i++) {
+    for (int j = patchBegin; j < patchEnd; j++) {
+      for (int k = patchBegin; k < patchEnd; k++) {
+        // x
+        solver.eigenvalues(luh + idx(i,j,k,0), 0/*x-axis*/, lambda);
+        std::transform(lambda, lambda + numberOfVariables, lambda,
+            std::abs<double>);
+        double s_max_x = *std::max_element(lambda, lambda + numberOfVariables);
+
+          if(useViscousFlux){
+              solver.viscousEigenvalues(luh + idx(i,j,k,0), 0/*x-axis*/, lambda);
+              std::transform(lambda, lambda + numberOfVariables, lambda,
+                      std::abs<double>);
+              double s_max_x_vis = *std::max_element(lambda, lambda + numberOfVariables);
+              s_max_x += (2.0/(dx[0]/patchSize)) * s_max_x_vis;
+          }
+
+        dt_max_stable = std::min(
+            dt_max_stable, cflFactor / DIMENSIONS * (dx[0]/patchSize) / s_max_x);
+
+        // y
+        solver.eigenvalues(luh + idx(i,j,k,0), 1/*y-axis*/, lambda);
+        std::transform(lambda, lambda + numberOfVariables, lambda,
+            std::abs<double>);
+        double s_max_y = *std::max_element(lambda, lambda + numberOfVariables);
+
+
+          if(useViscousFlux){
+              solver.viscousEigenvalues(luh + idx(i,j,k,0), 1/*y-axis*/, lambda);
+              std::transform(lambda, lambda + numberOfVariables, lambda,
+                      std::abs<double>);
+              double s_max_y_vis = *std::max_element(lambda, lambda + numberOfVariables);
+              s_max_y += (2.0/(dx[1]/patchSize)) * s_max_y_vis;
+
+          }
+
+        dt_max_stable = std::min(
+            dt_max_stable, cflFactor / DIMENSIONS * (dx[1]/patchSize) / s_max_y);
+
+        // z
+        solver.eigenvalues(luh + idx(i,j,k,0), 2/*z-axis*/, lambda);
+        std::transform(lambda, lambda + numberOfVariables, lambda,
+            std::abs<double>);
+        double s_max_z = *std::max_element(lambda, lambda + numberOfVariables);
+
+          if(useViscousFlux){
+              solver.viscousEigenvalues(luh + idx(i,j,k,0), 2/*z-axis*/, lambda);
+              std::transform(lambda, lambda + numberOfVariables, lambda,
+                      std::abs<double>);
+              double s_max_z_vis = *std::max_element(lambda, lambda + numberOfVariables);
+              s_max_z += (2.0/(dx[2]/patchSize)) * s_max_z_vis;
+
+          }
+
+        dt_max_stable = std::min(
+            dt_max_stable, cflFactor / DIMENSIONS * (dx[2]/patchSize) / s_max_z);
+      }
+    }
+  }
+  return dt_max_stable;
+}
+
+template <typename SolverType>
+void kernels::finitevolumes::commons::c::solutionAdjustment(
+    SolverType& solver,
+    double* luh, const tarch::la::Vector<DIMENSIONS, double>& center,
+    const tarch::la::Vector<DIMENSIONS, double>& dx, const double t,const double dt) {
+  constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int patchSize          = SolverType::PatchSize;
+  constexpr int ghostLayerWidth    = SolverType::GhostLayerWidth;
+  constexpr int patchBegin         = ghostLayerWidth;
+  constexpr int patchEnd           = patchBegin+patchSize;
+
+  double x[DIMENSIONS];
+
+  kernels::idx4 idx(patchSize+2*ghostLayerWidth,
+      patchSize+2*ghostLayerWidth,
+      patchSize+2*ghostLayerWidth,
+      numberOfVariables+numberOfParameters);
+
+  for (int k = patchBegin; k < patchEnd; k++) {
+    const double qk = (2.0*(k-patchBegin)+1.0)/(2.0*patchSize); //linspace;
+    x[2] = center[2] + dx[2] * (qk - 0.5);
+
+    for (int j = patchBegin; j < patchEnd; j++) {
+      const double qj = (2.0*(j-patchBegin)+1.0)/(2.0*patchSize); //linspace;
+      x[1] = center[1] + dx[1] * (qj - 0.5);
+
+      for (int i = patchBegin; i < patchEnd; i++) {
+        const double qi = (2.0*(i-patchBegin)+1.0)/(2.0*patchSize); //linspace;
+        x[0] = center[0] + dx[0] * (qi - 0.5);
+        // read initial condition
+        solver.adjustSolution(x, t, dt, luh+idx(k,j,i,0));
+      }
+    }
+  }
+}
+
+template <typename SolverType>
+void kernels::finitevolumes::commons::c::boundaryLayerExtraction(
+    SolverType& solver,
+    double* luhbnd,const double* luh,
+    const tarch::la::Vector<DIMENSIONS,int>& boundaryPosition) {
+  constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int numberOfData       = numberOfVariables+numberOfParameters;
+  constexpr int patchSize          = SolverType::PatchSize;
+  constexpr int ghostLayerWidth    = SolverType::GhostLayerWidth;
+  constexpr int patchBegin=ghostLayerWidth;
+  constexpr int patchEnd=patchBegin+patchSize;
+
+  kernels::idx4 idx(patchSize+2*ghostLayerWidth,patchSize+2*ghostLayerWidth,patchSize+2*ghostLayerWidth,numberOfData);
+  kernels::idx4 idx_bnd_x(patchSize,patchSize,ghostLayerWidth,numberOfData);
+  kernels::idx4 idx_bnd_y(patchSize,ghostLayerWidth,patchSize,numberOfData);
+  kernels::idx4 idx_bnd_z(ghostLayerWidth,patchSize,patchSize,numberOfData);
+
+  // TODO: Depending on the memory layout, we can remove the loops
+  // and use larger strides for one of the coordinate directions.
+
+  // x-axis: strides: Mz>My
+  if (boundaryPosition[0] == -1) {  // |G0|G1|U0|U1|...
+    // assertion: boundaryPosition[1] == 0;
+    // assertion: boundaryPosition[2] == 0;
+    for (int j=patchBegin; j<patchEnd; ++j) {
+      for (int i=patchBegin; i<patchEnd; ++i) {
+        for (int k=0; k<ghostLayerWidth; k++) {
+          std::copy_n(
+              luh+idx(j,i,patchBegin+k,0),
+              numberOfData,
+              luhbnd+idx_bnd_x(j-patchBegin,i-patchBegin,k,0));
+        }
+      }
+    }
+  }
+  if (boundaryPosition[0] == +1) { // UN-1|UN||G0|G1|
+    // assertion: boundaryPosition[1] == 0;
+    // assertion: boundaryPosition[2] == 0;
+    for (int j=patchBegin; j<patchEnd; ++j) {
+      for (int i=patchBegin; i<patchEnd; ++i) {
+        for (int k=0; k<ghostLayerWidth; k++) {
+          std::copy_n(
+              luh+idx(j,i,patchEnd-ghostLayerWidth+k,0),
+              numberOfData,
+              luhbnd+idx_bnd_x(j-patchBegin,i-patchBegin,k,0));
+        }
+      }
+    }
+  }
+
+  // y-axis: strides: Mz>Mx
+  if (boundaryPosition[1] == -1) {
+    // assertion: boundaryPosition[0] == 0;
+    // assertion: boundaryPosition[2] == 0;
+    for (int j=patchBegin; j<patchEnd; ++j) {
+      for (int i=patchBegin; i<patchEnd; ++i) {
+        for (int k=0; k<ghostLayerWidth; k++) {
+          std::copy_n(
+              luh+idx(j,patchBegin,i,0),
+              numberOfData,
+              luhbnd+idx_bnd_y(j-patchBegin,k,i-patchBegin,0));
+        }
+      }
+    }
+  }
+  if (boundaryPosition[1] == +1) {
+    // assertion: boundaryPosition[0] == 0;
+    // assertion: boundaryPosition[2] == 0;
+    for (int j=patchBegin; j<patchEnd; ++j) {
+      for (int i=patchBegin; i<patchEnd; ++i) {
+        for (int k=0; k<ghostLayerWidth; k++) {
+          std::copy_n(
+              luh+idx(j,patchEnd-ghostLayerWidth+k,i,0),
+              numberOfData,
+              luhbnd+idx_bnd_y(j-patchBegin,k,i-patchBegin,0));
+        }
+      }
+    }
+  }
+
+  // z-axis: strides: My>Mx
+  if (boundaryPosition[2] == -1) {
+    // assertion: boundaryPosition[0] == 0;
+    // assertion: boundaryPosition[1] == 0;
+    for (int j=patchBegin; j<patchEnd; ++j) {
+      for (int i=patchBegin; i<patchEnd; ++i) {
+        for (int k=0; k<ghostLayerWidth; k++) {
+          std::copy_n(
+              luh+idx(patchBegin,j,i,0),
+              numberOfData,
+              luhbnd+idx_bnd_z(k,j-patchBegin,i-patchBegin,0));
+        }
+      }
+    }
+  }
+  if (boundaryPosition[2] == +1) {
+    // assertion: boundaryPosition[0] == 0;
+    // assertion: boundaryPosition[1] == 0;
+    for (int j=patchBegin; j<patchEnd; ++j) {
+      for (int i=patchBegin; i<patchEnd; ++i) {
+        for (int k=0; k<ghostLayerWidth; k++) {
+          std::copy_n(
+              luh+idx(patchEnd-ghostLayerWidth+k,j,i,0),
+              numberOfData,
+              luhbnd+idx_bnd_z(k,j-patchBegin,i-patchBegin,0));
+        }
+      }
+    }
+  }
+}
+
+template <typename SolverType>
+void kernels::finitevolumes::commons::c::ghostLayerFillingAtBoundary(
+    SolverType& solver,
+    double* luh,const double* luhbnd,
+    const tarch::la::Vector<DIMENSIONS,int>& boundaryPosition) {
+  constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int numberOfData       = numberOfVariables+numberOfParameters;
+  constexpr int patchSize          = SolverType::PatchSize;
+  constexpr int ghostLayerWidth    = SolverType::GhostLayerWidth;
+  constexpr int patchBegin=ghostLayerWidth;
+  constexpr int patchEnd=patchBegin+patchSize;
+
+  kernels::idx4 idx(patchSize+2*ghostLayerWidth,patchSize+2*ghostLayerWidth,patchSize+2*ghostLayerWidth,numberOfData);
+  kernels::idx4 idx_bnd_x(patchSize,patchSize,ghostLayerWidth,numberOfData);
+  kernels::idx4 idx_bnd_y(patchSize,ghostLayerWidth,patchSize,numberOfData);
+  kernels::idx4 idx_bnd_z(ghostLayerWidth,patchSize,patchSize,numberOfData);
+
+  // TODO: Depending on the memory layout, we can remove the loop,
+  // and use larger strides for one of the coordinate directions.
+
+  // x-axis
+  if (boundaryPosition[0] == -1) {
+    // assertion: boundaryPosition[1] == 0;
+    // assertion: boundaryPosition[2] == 0;
+    for (int j=patchBegin; j<patchEnd; ++j) {
+      for (int i=patchBegin; i<patchEnd; ++i) {
+        for (int k=0; k<ghostLayerWidth; ++k) {
+          std::copy_n(
+              luhbnd+idx_bnd_x(j-patchBegin,i-patchBegin,k,0),
+              numberOfData,
+              luh+idx(j,i,k,0));
+        }
+      }
+    }
+  }
+  if (boundaryPosition[0] == +1) {
+    // assertion: boundaryPosition[1] == 0;
+    // assertion: boundaryPosition[2] == 0;
+    for (int j=patchBegin; j<patchEnd; ++j) {
+      for (int i=patchBegin; i<patchEnd; ++i) {
+        for (int k=0; k<ghostLayerWidth; ++k) {
+          std::copy_n(
+              luhbnd+idx_bnd_x(j-patchBegin,i-patchBegin,k,0),
+              numberOfData,
+              luh+idx(j,i,patchEnd+k,0));
+        }
+      }
+    }
+  }
+
+  // y-axis
+  if (boundaryPosition[1] == -1) {
+    // assertion: boundaryPosition[0] == 0;
+    // assertion: boundaryPosition[2] == 0;
+    for (int j=patchBegin; j<patchEnd; ++j) {
+      for (int i=patchBegin; i<patchEnd; ++i) {
+        for (int k=0; k<ghostLayerWidth; ++k) {
+          std::copy_n(
+              luhbnd+idx_bnd_y(j-patchBegin,k,i-patchBegin,0),
+              numberOfData,
+              luh+idx(j,k,i,0));
+        }
+      }
+    }
+  }
+  if (boundaryPosition[1] == +1) {
+    // assertion: boundaryPosition[0] == 0;
+    // assertion: boundaryPosition[2] == 0;
+    for (int j=patchBegin; j<patchEnd; ++j) {
+      for (int i=patchBegin; i<patchEnd; ++i) {
+        for (int k=0; k<ghostLayerWidth; ++k) {
+          std::copy_n(
+              luhbnd+idx_bnd_y(j-patchBegin,k,i-patchBegin,0),
+              numberOfData,
+              luh+idx(j,patchEnd+k,i,0));
+        }
+      }
+    }
+  }
+
+  // z-axis
+  if (boundaryPosition[2] == -1) {
+    // assertion: boundaryPosition[0] == 0;
+    // assertion: boundaryPosition[1] == 0;
+    for (int j=patchBegin; j<patchEnd; ++j) {
+      for (int i=patchBegin; i<patchEnd; ++i) {
+        for (int k=0; k<ghostLayerWidth; ++k) {
+          std::copy_n(
+              luhbnd+idx_bnd_z(k,j-patchBegin,i-patchBegin,0),
+              numberOfData,
+              luh+idx(k,j,i,0));
+        }
+      }
+    }
+  }
+  if (boundaryPosition[2] == +1) {
+    // assertion: boundaryPosition[0] == 0;
+    // assertion: boundaryPosition[1] == 0;
+    for (int j=patchBegin; j<patchEnd; ++j) {
+      for (int i=patchBegin; i<patchEnd; ++i) {
+        for (int k=0; k<ghostLayerWidth; ++k) {
+          std::copy_n(
+              luhbnd+idx_bnd_z(k,j-patchBegin,i-patchBegin,0),
+              numberOfData,
+              luh+idx(patchEnd+k,j,i,0));
+        }
+      }
+    }
+  }
+}
+
+template <typename SolverType>
+void kernels::finitevolumes::commons::c::boundaryConditions(SolverType& solver,
+    double* stateOut,
+    const double* const stateIn,
+    const tarch::la::Vector<DIMENSIONS, double>& cellCentre,
+    const tarch::la::Vector<DIMENSIONS,double>& cellSize,
+    const double t,const double dt,
+    const int faceIndex,
+    const int normalNonZero) {
+  constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int numberOfData       = numberOfVariables+numberOfParameters;
+  constexpr int patchSize          = SolverType::PatchSize;
+  constexpr int ghostLayerWidth    = SolverType::GhostLayerWidth;
+
+  const int orientation = faceIndex % 2; // orientation=1 if face normal follows the direction
+  const int direction   = (faceIndex-orientation) / 2;
+
+  double xOutside[DIMENSIONS]; // centre of the outside FV subcell
+
+  // x-left (
+  if (direction==0 && orientation==0) {
+    kernels::idx4 idx_bnd_x(patchSize,patchSize,ghostLayerWidth,numberOfData);
+
+    for (int k = 0; k < ghostLayerWidth; ++k) {
+      const int K=ghostLayerWidth-k-1; // mirror index k as k=0 is (in general) further away from patch than k=ghostLayerWidth-1
+      xOutside[0] = cellCentre[0] - 0.5 * cellSize[0] * ( 1.0 + (1.0+2.0*K)/patchSize ); // !!! be aware of sign in front of 0.5 and big "K"
+
+      for (int j = 0; j < patchSize; ++j) {
+        for (int i = 0; i < patchSize; ++i) {
+          const double qj = (2.0*j+1.0)/(2.0*patchSize);
+          const double qi = (2.0*i+1.0)/(2.0*patchSize);
+          xOutside[2] = cellCentre[2] + cellSize[2] * (qj - 0.5);
+          xOutside[1] = cellCentre[1] + cellSize[1] * (qi - 0.5);
+
+          solver.boundaryValues(xOutside,t,dt,faceIndex,normalNonZero, // mirrors stateIn DoF at boundary
+              stateIn + idx_bnd_x(j,i,K,0),stateOut + idx_bnd_x(j,i,k,0)); // TODO: suboptimal memory layout
+        }
+      }
+    }
+  }
+  // x-right
+  else if (direction==0 && orientation==1) {
+    kernels::idx4 idx_bnd_x(patchSize,patchSize,ghostLayerWidth,numberOfData);
+
+    for (int k = 0; k < ghostLayerWidth; ++k) {
+      xOutside[0] = cellCentre[0] + 0.5 * cellSize[0] * ( 1.0 + (1.0+2.0*k)/patchSize ); // !!! be aware of sign in front of 0.5 and small "k"
+
+      for (int j = 0; j < patchSize; ++j) {
+        for (int i = 0; i < patchSize; ++i) {
+          const double qj = (2.0*j+1.0)/(2.0*patchSize);
+          const double qi = (2.0*i+1.0)/(2.0*patchSize);
+          xOutside[2] = cellCentre[2] + cellSize[2] * (qj - 0.5);
+          xOutside[1] = cellCentre[1] + cellSize[2] * (qi - 0.5);
+
+          const int K=ghostLayerWidth-k-1; // mirror
+          solver.boundaryValues(xOutside,t,dt,faceIndex,normalNonZero, // mirrors stateIn DoF at boundary
+              stateIn + idx_bnd_x(j,i,K,0),stateOut + idx_bnd_x(j,i,k,0));
+        }
+      }
+    }
+  }
+  // y-front
+  else if (direction==1 && orientation==0) {
+    kernels::idx4 idx_bnd_y(patchSize,ghostLayerWidth,patchSize,numberOfData);
+
+    for (int k = 0; k < ghostLayerWidth; ++k) {
+      const int K=ghostLayerWidth-k-1; // mirror index k as k=0 is (in general) further away from patch than k=ghostLayerWidth-1
+      xOutside[1] = cellCentre[1] - 0.5 * cellSize[1] * ( 1.0 + (1.0+2.0*K)/patchSize ); // !!! be aware of sign in front of 0.5 and big "K"
+
+      for (int j = 0; j < patchSize; ++j) {
+        for (int i = 0; i < patchSize; ++i) {
+          const double qj = (2.0*j+1.0)/(2.0*patchSize);
+          const double qi = (2.0*i+1.0)/(2.0*patchSize);
+          xOutside[2] = cellCentre[2] + cellSize[2] * (qj - 0.5);
+          xOutside[0] = cellCentre[0] + cellSize[0] * (qi - 0.5);
+
+          solver.boundaryValues(xOutside,t,dt,faceIndex,normalNonZero, // mirrors stateIn DoF at boundary
+              stateIn + idx_bnd_y(j,K,i,0),stateOut + idx_bnd_y(j,k,i,0));
+        }
+      }
+    }
+  }
+  // y-back
+  else if (direction==1 && orientation==1) {
+    kernels::idx4 idx_bnd_y(patchSize,ghostLayerWidth,patchSize,numberOfData);
+
+    for (int k = 0; k < ghostLayerWidth; ++k) {
+      xOutside[1] = cellCentre[1] + 0.5 * cellSize[1] * ( 1.0 + (1.0+2.0*k)/patchSize ); // !!! be aware of sign in front of 0.5 and small "k"
+
+      for (int j = 0; j < patchSize; ++j) {
+        for (int i = 0; i < patchSize; ++i) {
+          const double qj = (2.0*j+1.0)/(2.0*patchSize);
+          const double qi = (2.0*i+1.0)/(2.0*patchSize);
+          xOutside[2] = cellCentre[2] + cellSize[2] * (qj - 0.5);
+          xOutside[0] = cellCentre[0] + cellSize[0] * (qi - 0.5);
+
+          const int K=ghostLayerWidth-k-1; // mirror
+          solver.boundaryValues(xOutside,t,dt,faceIndex,normalNonZero, // mirrors stateIn DoF at boundary
+              stateIn + idx_bnd_y(j,K,i,0),stateOut + idx_bnd_y(j,k,i,0));
+        }
+      }
+    }
+  }
+  // z-bottom
+  else if (direction==2 && orientation==0) {
+    kernels::idx4 idx_bnd_z(ghostLayerWidth,patchSize,patchSize,numberOfData);
+
+    for (int k = 0; k < ghostLayerWidth; ++k) {
+      const int K=ghostLayerWidth-k-1; // mirror index k as k=0 is (in general) further away from patch than k=ghostLayerWidth-1
+      xOutside[2] = cellCentre[2] - 0.5 * cellSize[2] * ( 1.0 + (1.0+2.0*K)/patchSize ); // !!! be aware of sign in front of 0.5 and big "K"
+
+      for (int j = 0; j < patchSize; ++j) {
+        for (int i = 0; i < patchSize; ++i) {
+          const double qj = (2.0*j+1.0)/(2.0*patchSize);
+          const double qi = (2.0*i+1.0)/(2.0*patchSize);
+          xOutside[1] = cellCentre[1] + cellSize[1] * (qj - 0.5);
+          xOutside[0] = cellCentre[0] + cellSize[0] * (qi - 0.5);
+
+          solver.boundaryValues(xOutside,t,dt,faceIndex,normalNonZero, // mirrors stateIn DoF at boundary
+              stateIn + idx_bnd_z(K,j,i,0),stateOut + idx_bnd_z(k,j,i,0));
+        }
+      }
+    }
+  }
+  // z-top
+  else if (direction==2 && orientation==1) {
+    kernels::idx4 idx_bnd_z(ghostLayerWidth,patchSize,patchSize,numberOfData);
+
+    for (int k = 0; k < ghostLayerWidth; ++k) {
+      xOutside[2] = cellCentre[2] + 0.5 * cellSize[2] * ( 1.0 + (1.0+2.0*k)/patchSize ); // !!! be aware of sign in front of 0.5 and small "k"
+
+      for (int j = 0; j < patchSize; ++j) {
+        for (int i = 0; i < patchSize; ++i) {
+          const double qj = (2.0*j+1.0)/(2.0*patchSize);
+          const double qi = (2.0*i+1.0)/(2.0*patchSize);
+          xOutside[1] = cellCentre[1] + cellSize[1] * (qj - 0.5);
+          xOutside[0] = cellCentre[0] + cellSize[0] * (qi - 0.5);
+
+          const int K=ghostLayerWidth-k-1; // mirror
+          solver.boundaryValues(xOutside,t,dt,faceIndex,normalNonZero, // mirrors stateIn DoF at boundary
+              stateIn + idx_bnd_z(K,j,i,0),stateOut + idx_bnd_z(k,j,i,0));
+        }
+      }
+    }
+  } else {
+    assertionMsg(false,"direction must be either 0 or 1.");
+  }
+}
+
+template <typename SolverType>
+void kernels::finitevolumes::commons::c::ghostLayerFilling(
+    SolverType& solver,
+    double* luh,const double* luhNeighbour,
+    const tarch::la::Vector<DIMENSIONS,int>& neighbourPosition) {
+  constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int numberOfData       = numberOfVariables+numberOfParameters;
+  constexpr int patchSize          = SolverType::PatchSize;
+  constexpr int ghostLayerWidth    = SolverType::GhostLayerWidth;
+  constexpr int patchBegin=ghostLayerWidth;
+  constexpr int patchEnd=patchBegin+patchSize;
+
+  kernels::idx4 idx(patchSize+2*ghostLayerWidth,patchSize+2*ghostLayerWidth,patchSize+2*ghostLayerWidth,numberOfData);
+
+  // TODO: Depending on the memory layout, we can remove the loop,
+  // and use larger strides for one of the coordinate directions.
+
+  // x-axis
+  if (neighbourPosition[0] == -1) {
+    // assertion: neighbourPosition[1] == 0;
+    // assertion: neighbourPosition[2] == 0;
+    for (int j=patchBegin; j<patchEnd; ++j) {
+      for (int i=patchBegin; i<patchEnd; ++i) {
+        for (int k=0; k<ghostLayerWidth; ++k) {
+          std::copy_n(
+              luhNeighbour+idx(j,i,patchEnd-ghostLayerWidth+k,0),
+              numberOfData,
+              luh+idx(j,i,k,0));
+        }
+      }
+    }
+  }
+  if (neighbourPosition[0] == +1) {
+    // assertion: neighbourPosition[1] == 0;
+    // assertion: neighbourPosition[2] == 0;
+    for (int j=patchBegin; j<patchEnd; ++j) {
+      for (int i=patchBegin; i<patchEnd; ++i) {
+        for (int k=0; k<ghostLayerWidth; ++k) {
+          std::copy_n(
+              luhNeighbour+idx(j,i,patchBegin+k,0),
+              numberOfData,
+              luh+idx(j,i,patchEnd+k,0));
+        }
+      }
+    }
+  }
+
+  // y-axis
+  if (neighbourPosition[1] == -1) {
+    // assertion: neighbourPosition[0] == 0;
+    // assertion: neighbourPosition[2] == 0;
+    for (int j=patchBegin; j<patchEnd; ++j) {
+      for (int i=patchBegin; i<patchEnd; ++i) {
+        for (int k=0; k<ghostLayerWidth; ++k) {
+          std::copy_n(
+              luhNeighbour+idx(j,patchEnd-ghostLayerWidth+k,i,0),
+              numberOfData,
+              luh+idx(j,k,i,0));
+        }
+      }
+    }
+  }
+  if (neighbourPosition[1] == +1) {
+    // assertion: neighbourPosition[0] == 0;
+    // assertion: neighbourPosition[2] == 0;
+    for (int j=patchBegin; j<patchEnd; ++j) {
+      for (int i=patchBegin; i<patchEnd; ++i) {
+        for (int k=0; k<ghostLayerWidth; ++k) {
+          std::copy_n(
+              luhNeighbour+idx(j,patchBegin+k,i,0),
+              numberOfData,
+              luh+idx(j,patchEnd+k,i,0));
+        }
+      }
+    }
+  }
+
+  // z-axis
+  if (neighbourPosition[2] == -1) {
+    // assertion: neighbourPosition[0] == 0;
+    // assertion: neighbourPosition[1] == 0;
+    for (int j=patchBegin; j<patchEnd; ++j) {
+      for (int i=patchBegin; i<patchEnd; ++i) {
+        for (int k=0; k<ghostLayerWidth; ++k) {
+          std::copy_n(
+              luhNeighbour+idx(patchEnd-ghostLayerWidth+k,j,i,0),
+              numberOfData,
+              luh+idx(k,j,i,0));
+        }
+      }
+    }
+  }
+  if (neighbourPosition[2] == +1) {
+    // assertion: neighbourPosition[0] == 0;
+    // assertion: neighbourPosition[1] == 0;
+    for (int j=patchBegin; j<patchEnd; ++j) {
+      for (int i=patchBegin; i<patchEnd; ++i) {
+        for (int k=0; k<ghostLayerWidth; ++k) {
+          std::copy_n(
+              luhNeighbour+idx(patchBegin+k,j,i,0),
+              numberOfData,
+              luh+idx(patchEnd+k,j,i,0));
+        }
+      }
+    }
+  }
+}
+#endif // DIMENSIONS

@@ -1,0 +1,36 @@
+template<int StencilSize>
+tarch::la::Vector<StencilSize*StencilSize,double> matrixfree::stencil::stencilProduct(
+  const tarch::la::Vector<StencilSize,double>& a,
+  const tarch::la::Vector<StencilSize,double>& b
+) {
+  tarch::la::Vector<StencilSize*StencilSize,double> result;
+
+  for (int i=0; i<StencilSize; i++) {
+    for (int j=0; j<StencilSize; j++) {
+      result(i+j*StencilSize) = a(i) * b(j);
+    }
+  }
+
+  return result;
+}
+
+
+
+template<int StencilSize>
+tarch::la::Vector<StencilSize*StencilSize*StencilSize,double> matrixfree::stencil::stencilProduct(
+  const tarch::la::Vector<StencilSize,double>& a,
+  const tarch::la::Vector<StencilSize,double>& b,
+  const tarch::la::Vector<StencilSize,double>& c
+) {
+  tarch::la::Vector<StencilSize*StencilSize*StencilSize,double> result;
+
+  for (int i=0; i<StencilSize; i++) {
+    for (int j=0; j<StencilSize; j++) {
+      for (int k=0; k<StencilSize; k++) {
+        result(i+j*StencilSize+k*StencilSize*StencilSize) = a(i) * b(j) * c(k);
+      }
+    }
+  }
+
+  return result;
+}

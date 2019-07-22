@@ -1,0 +1,135 @@
+
+component: ExaHyPE
+
+namespace: ::exahype
+
+heap-dastgen-file: ADERDGCellDescription.def
+heap-dastgen-file: FiniteVolumesCellDescription.def
+
+vertex:
+  dastgen-file: Vertex.def
+  read vector2PowD(int): CellDescriptionsIndex
+  write vector2PowD(int): CellDescriptionsIndex
+  
+cell:
+  dastgen-file: Cell.def
+
+state:
+  dastgen-file: State.def
+  
+event-mapping:
+  name: UpdateAndReduce
+  
+event-mapping:
+  name: FusedTimeStep
+
+event-mapping: // -DEC: consider to move the computation of boundary extrapolated values out of the space-time predictor mapping
+  name: Prediction
+
+event-mapping: 
+  name: LoadBalancing
+ 
+event-mapping:
+  name: BroadcastAndDropNeighbourMessages
+  
+event-mapping:
+  name: MergeNeighbours
+ 
+event-mapping:
+  name: Plot
+
+// Limiter
+event-mapping:
+  name: RefinementStatusSpreading
+
+event-mapping:
+  name: LocalRollback
+  
+event-mapping:
+  name: PredictionOrLocalRecomputation
+  
+// GridUpdate     
+event-mapping:
+  name: MeshRefinement
+  
+event-mapping:
+  name: FinaliseMeshRefinement
+
+event-mapping:
+  name: AugmentedAMRTreePlot2d
+  
+adapter:
+  name: MeshRefinement
+  merge-with-user-defined-mapping: MeshRefinement          // (createInner/BoundaryVertex,enterCell,serial)
+  merge-with-user-defined-mapping: LoadBalancing
+  merge-with-user-defined-mapping: LevelwiseAdjacencyBookkeeping
+
+adapter:
+  name: MeshRefinementAndPlotTree
+  merge-with-user-defined-mapping: MeshRefinement           //(createInner/BoundaryVertex,enterCell,serial)
+  merge-with-predefined-mapping:   VTKGridVisualiser(grid)
+  merge-with-user-defined-mapping: AugmentedAMRTreePlot2d
+  merge-with-user-defined-mapping: LoadBalancing
+  merge-with-user-defined-mapping: LevelwiseAdjacencyBookkeeping
+  
+// adapter:
+//   name: PlotAugmentedAMRGrid
+//   merge-with-user-defined-mapping: AugmentedAMRTreePlot2d 
+//   merge-with-predefined-mapping: VTKGridVisualiser(grid)
+
+adapter:
+  name: FinaliseMeshRefinement
+  merge-with-user-defined-mapping: FinaliseMeshRefinement // sends time step data up to the master
+  merge-with-user-defined-mapping: LevelwiseAdjacencyBookkeeping
+  
+adapter:
+  name: FinaliseMeshRefinementOrLocalRollback
+  merge-with-user-defined-mapping: FinaliseMeshRefinement  // sends time step data up to the master
+  merge-with-user-defined-mapping: LocalRollback           // does not send because 
+  merge-with-user-defined-mapping: LevelwiseAdjacencyBookkeeping
+
+adapter:
+  name: InitialPrediction
+  merge-with-user-defined-mapping: Prediction
+  
+// Adapter for 1 phase time stepping
+adapter: 
+  name: FusedTimeStep
+  merge-with-user-defined-mapping: FusedTimeStep
+  
+adapter:
+  name: PredictionRerun 
+  merge-with-user-defined-mapping: PredictionRerun
+
+// Additional adapters for limiter status spreading and recomputation
+adapter: 
+  name: BroadcastAndDropNeighbourMessages
+  merge-with-user-defined-mapping: BroadcastAndDropNeighbourMessages
+
+adapter:
+  name: RefinementStatusSpreading
+  merge-with-user-defined-mapping: RefinementStatusSpreading
+
+adapter: 
+  name: PredictionOrLocalRecomputation
+  merge-with-user-defined-mapping: PredictionOrLocalRecomputation // This advances in time for local recomp.
+ 
+// Additional adapters for 3 phase time stepping
+adapter: 
+  name: MergeNeighbours
+  merge-with-user-defined-mapping: MergeNeighbours
+
+adapter:
+  name: UpdateAndReduce
+  merge-with-user-defined-mapping: UpdateAndReduce
+
+adapter:
+  name: Prediction
+  merge-with-user-defined-mapping: Prediction
+
+// Additional adapters for 2 phase time stepping
+
+adapter:
+  name: Correction
+  merge-with-user-defined-mapping: MergeNeighbours
+  merge-with-user-defined-mapping: UpdateAndReduce

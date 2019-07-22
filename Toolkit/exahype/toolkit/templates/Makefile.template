@@ -1,0 +1,118 @@
+# *********************************************************************************************
+# README
+# *********************************************************************************************
+#
+# Available configuration Parameters for ExaHyPE
+#
+# export variable  |  default-value  |  further values         |  description
+#-------------------------------------------------------------------------------------------------------
+# COMPILER            Intel             GNU                          Used compiler (and linker)
+# MODE                Release           Debug,                       Verbosity and Debug level
+#                                       Asserts,PeanoProfile,Profile          
+{% if useSharedMem %}
+# SHAREDMEM           TBB               OMP, None                    Shared-memory parallelisation
+{% else %}
+# SHAREDMEM           None              OMP, TBB                     Shared-memory parallelisation
+{% endif %}
+{% if useDistributedMem %}
+# DISTRIBUTEDMEM      MPI               None                         Distributed-memory parallelisation
+{% else %}
+# DISTRIBUTEDMEM      None              MPI                          Distributed-memory parallelisation
+{% endif %}
+# BOUNDARYCONDITIONS  None              Periodic                     Type of boundary conditions
+# USE_IPO             Off               On, Unsafe                   IPO during compilation (intel only)
+# ******************************************************************************************************
+
+# Helper
+SHELL = bash
+tolower = $(shell echo $(1) | tr '[:upper:]' '[:lower:]')
+
+# Default Paths and name
+PEANO_KERNEL_PEANO_PATH={{peanoToolboxPath}}/peano
+PEANO_KERNEL_TARCH_PATH={{peanoToolboxPath}}/tarch
+PEANO_TOOLBOX_MULTISCALELINKEDCELL_PATH={{peanoToolboxPath}}/multiscalelinkedcell
+PEANO_TOOLBOX_SHAREDMEMORY_ORACLES_PATH={{peanoToolboxPath}}/sharedmemoryoracles
+PEANO_TOOLBOX_MPI_BLANCING_PATH={{peanoToolboxPath}}/mpibalancing
+EXAHYPE_PATH={{exahypePath}}
+PROJECT_PATH={{outputPath}}
+EXECUTABLE=ExaHyPE-{{project}}
+
+# Default flags from specification file constants
+PROJECT_CFLAGS+= -DDim{{dimensions}}
+{% if architecture != "noarch" %}
+ARCHITECTURE={{architecture}}
+PROJECT_CFLAGS+= -DALIGNMENT={{alignment}}
+{% else %}
+ARCHITECTURE=CPU
+{% endif %}
+{% if compilerFlags != "" or linkerFlags != "" %}
+
+# Additional flags from specification file
+{% endif %}
+{% if compilerFlags != "" %}
+PROJECT_CFLAGS+={{compilerFlags}}
+{% endif %}
+{% if linkerFlags != "" %}
+PROJECT_LFLAGS+={{linkerFlags}}
+{% endif %}
+
+# Default sharedmem/distributedmem required by the specification file
+ifeq ($(SHAREDMEM),)
+{% if useSharedMem %}
+    SHAREDMEM=TBB
+{% else %}
+    SHAREDMEM=None
+{% endif %}
+endif
+ifeq ($(DISTRIBUTEDMEM),)
+{% if useDistributedMem %}
+    DISTRIBUTEDMEM=MPI
+{% else %}
+    DISTRIBUTEDMEM=None
+{% endif %}
+endif
+
+# If using TBB only, link pthread (comment this if you want to link a specific pthread)
+ifeq ($(call tolower,$(SHAREDMEM)),tbb)
+    ifeq ($(call tolower,$(DISTRIBUTEDMEM)),none)
+        PROJECT_LFLAGS+= -pthread
+    endif
+endif
+
+# Default options required by the specification file
+{% if useFortran %}
+ifeq ($(MIXEDLANG),)
+    MIXEDLANG=Yes
+endif
+{% endif %}
+{% if useOptKernel %}
+PROJECT_CFLAGS += -DOPT_KERNELS
+ifneq ($(call tolower,$(MODE)),release)
+ifneq ($(call tolower,$(MODE)),)
+    PROJECT_CFLAGS += -DTEST_OPT_KERNEL
+endif
+endif
+{% endif %}
+
+{% if useLikwid %}
+# Lib include for the profiler
+PROJECT_CFLAGS+= -DLIKWID_AVAILABLE
+PROJECT_CFLAGS+= -I{{likwidInc}}
+PROJECT_LFLAGS+= $(LIKWID_LIB)
+{% endif %}
+{% if useIpcm %}
+# Lib include for the profiler
+PROJECT_CFLAGS+= -DIPCM_AVAILABLE
+PROJECT_CFLAGS+= -I{{ipcmInc}}
+PROJECT_LFLAGS+= -L{{ipcmLib}} -lintelpcm
+{% endif %}
+
+
+# Main Makefile include
+-include {{exahypePath}}/Makefile
+
+
+all: 
+	@echo {{project}}
+	@echo =================
+	@echo An ExaHyPE solver

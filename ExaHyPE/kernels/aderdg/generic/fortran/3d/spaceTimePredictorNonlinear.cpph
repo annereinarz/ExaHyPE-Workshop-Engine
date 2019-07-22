@@ -1,0 +1,68 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon 
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/
+
+extern "C" {
+void aderpicardloopnonlinear_(const double* const luh,
+			      const double* const dt,
+			      const double* const dx,
+                              double *lQi, double *lFi);
+// void aderpredictor_(double *lQi, double *lFi, double *lQhi, double *lFhi);
+void aderpredictornonlinear_(double *lQi, double *lFi_x, double *lFhi_y,
+                             double *lFhi_z, double* lShi, double *lQhi, double *lFhi);
+// void aderextrapolator_(double *lQhi, double *lFhi, double *lQbnd, double
+// *lFbnd);
+void aderextrapolatornonlinear_(double *lQhi, double *lFhi_x, double *lFhi_y,
+                                double *lFhi_z, double *lQbnd, double *lFbnd);
+}
+
+template <typename SolverType>
+void kernels::aderdg::generic::fortran::spaceTimePredictorNonlinear(
+    SolverType& solver,
+    double*  lQbnd, double* lFbnd,
+    double** tempSpaceTimeUnknowns,
+    double** tempSpaceTimeFluxUnknowns,
+    double*  tempUnknowns,
+    double*  tempFluxUnknowns,
+    const double* const luh,
+    const tarch::la::Vector<DIMENSIONS, double>& dx,
+    const double dt,
+    double* tempPointForceSources //Not used, should be nullptr
+    ){
+  const int numberOfVariables  = solver.getNumberOfVariables();
+  const int numberOfParameters = solver.getNumberOfParameters();
+  const int basisSize          = solver.getNodesPerCoordinateAxis();
+  const int numSpaceDof        = numberOfVariables * basisSize * basisSize * basisSize;
+  
+  double* lQi  = tempSpaceTimeUnknowns[0];
+  double* lFi  = tempSpaceTimeFluxUnknowns[0];
+  double* lQhi = tempUnknowns;
+  double* lFhi = tempFluxUnknowns;
+  
+  aderpicardloopnonlinear_(luh, &dt, dx.data(), lQi, lFi);
+
+  // std::cout << "numSpaceDof: " << numSpaceDof << std::endl;
+  // lFhi = [ lFhi_x | lFhi_y | lFhi_z ]
+  // aderpredictor_(lQi,lFi,lQhi,lFhi);
+  aderpredictornonlinear_(lQi, lFi, lQhi, 
+			  &lFhi[0 * numSpaceDof], // lFhi_x
+                          &lFhi[1 * numSpaceDof], // lFhi_y
+			  &lFhi[2 * numSpaceDof], // lFhi_z
+			  &lFhi[3 * numSpaceDof]  // lShi
+ 			);
+  // aderextrapolator_(lQhi,lFhi,lQbnd,lFbnd);
+  aderextrapolatornonlinear_(lQhi, 
+			     &lFhi[0 * numSpaceDof],
+                             &lFhi[1 * numSpaceDof], 
+			     &lFhi[2 * numSpaceDof],
+                             lQbnd, lFbnd);
+}

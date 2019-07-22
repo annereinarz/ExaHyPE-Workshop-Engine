@@ -1,0 +1,133 @@
+/**
+* This file is part of the ExaHyPE project.
+* Copyright (c) 2016  http://exahype.eu
+* All rights reserved.
+*
+* The project has received funding from the European Union's Horizon
+* 2020 research and innovation programme under grant agreement
+* No 671698. For copyrights and licensing, please consult the webpage.
+*
+* Released under the BSD 3 Open Source License.
+* For the full license text, see LICENSE.txt
+**/
+
+// included in ../../Kernels.h
+
+#include <algorithm>
+#include <cassert>
+#include <cmath>
+#include <cstring>
+
+#include "../../../../KernelUtils.h"
+
+namespace kernels {
+namespace aderdg {
+namespace generic {
+namespace c {
+
+/**
+* We implement a very simple Rusanov scheme with scalar dissipation
+* (smax*Id).
+*
+* We need to consider material parameters
+* in QL and QR.
+* We don't need to consider material parameters
+* in FL,FR.
+*/
+template <bool useNCP, bool useViscousFlux, typename SolverType>
+void riemannSolverNonlinear(SolverType& solver, double* FL, double* FR,
+                            const double* const QL,
+                            const double* const QR,
+                            const double t,
+                            const double dt,
+                            const tarch::la::Vector<DIMENSIONS, double>& dx,
+                            const int direction) {
+  constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int numberOfData       = numberOfVariables+numberOfParameters;
+  constexpr int order              = SolverType::Order;
+  constexpr int basisSize          = order+1;
+
+  // Compute the average variables and parameters from the left and the right
+  double QavL[numberOfData] = {0.0};
+  double QavR[numberOfData] = {0.0};
+  kernels::riemannsolvers::util::averageRiemannInputs<basisSize,numberOfData>(
+      QL,kernels::gaussLegendreWeights,QavL);
+  kernels::riemannsolvers::util::averageRiemannInputs<basisSize,numberOfData>(
+      QR,kernels::gaussLegendreWeights,QavR);
+
+  double LL[numberOfVariables] = {0.0}; // do not need to store material parameters
+  double LR[numberOfVariables] = {0.0};
+
+  // Hyperbolic eigenvalues
+  solver.eigenvalues(QavL, direction, LL);
+  solver.eigenvalues(QavR, direction, LR);
+  // skip parameters
+  std::transform(LL, LL + numberOfVariables, LL, std::abs<double>);
+  std::transform(LR, LR + numberOfVariables, LR, std::abs<double>);
+  const double maxHyperbolicEigenvalueL = *std::max_element(LL, LL + numberOfVariables);
+  const double maxHyperbolicEigenvalueR = *std::max_element(LR, LR + numberOfVariables);
+  const double maxHyperbolicEigenvalue = std::max(maxHyperbolicEigenvalueL, maxHyperbolicEigenvalueR);
+
+  double smax = maxHyperbolicEigenvalue;
+  if (useViscousFlux) {
+    solver.viscousEigenvalues(QavL, direction, LL);
+    solver.viscousEigenvalues(QavR, direction, LR);
+    // skip parameters
+    std::transform(LL, LL + numberOfVariables, LL, std::abs<double>);
+    std::transform(LR, LR + numberOfVariables, LR, std::abs<double>);
+    const double maxViscousEigenvalueL = *std::max_element(LL, LL + numberOfVariables);
+    const double maxViscousEigenvalueR = *std::max_element(LR, LR + numberOfVariables);
+    const double maxViscousEigenvalue  = std::max(maxViscousEigenvalueL, maxViscousEigenvalueR);
+
+    const auto pi = std::acos(-1); // not constexpr for intel compilers
+    const double factor = 2 * (2 * order + 1) / (dx[direction]
+            * std::sqrt(0.5 * pi));
+    smax += factor * maxViscousEigenvalue;
+  }
+
+  // compute fluxes (and fluctuations for non-conservative PDEs)
+  double Qavg[numberOfData];
+  idx2 idx_gradQ(DIMENSIONS, numberOfVariables);
+  double gradQ[DIMENSIONS][numberOfVariables] = {0.0};
+  double ncp[numberOfVariables]               = {0.0};
+  {
+    idx3 idx_FLR(basisSize, basisSize, numberOfVariables);
+    idx3 idx_QLR(basisSize, basisSize, numberOfData);
+
+    for (int i = 0; i < basisSize; i++) {
+      for (int j = 0; j < basisSize; j++) {
+
+        if(useNCP) { // we don't use matrixB but the NCP call here.
+          for(int l=0; l < numberOfVariables; l++) {
+            gradQ[direction][l] = QR[idx_QLR(i, j, l)] - QL[idx_QLR(i, j, l)];
+          }
+          for(int l=0; l < numberOfData; l++) {
+            Qavg[l] = 0.5 * (QR[idx_QLR(i, j, l)] + QL[idx_QLR(i, j, l)]);
+          }
+          
+          solver.nonConservativeProduct(Qavg, gradQ[0], ncp);
+        }
+
+        // skip parameters
+        for (int k = 0; k < numberOfVariables; k++) {
+          FL[idx_FLR(i, j, k)] =
+              0.5 * (FR[idx_FLR(i, j, k)] + FL[idx_FLR(i, j, k)]) -
+              0.5 * smax * (QR[idx_QLR(i, j, k)] - QL[idx_QLR(i, j, k)]);
+
+          if(useNCP) {
+            FR[idx_FLR(i, j, k)] = FL[idx_FLR(i, j, k)] - 0.5 * ncp[k];
+            FL[idx_FLR(i, j, k)] = FL[idx_FLR(i, j, k)] + 0.5 * ncp[k];
+          } else {
+            FR[idx_FLR(i, j, k)] = FL[idx_FLR(i, j, k)];
+          }
+        }
+      }
+    }
+  }
+}
+
+}  // namespace c
+}  // namespace generic
+}  // namespace aderdg
+}  // namespace kernels

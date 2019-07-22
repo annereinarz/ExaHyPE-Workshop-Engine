@@ -1,0 +1,85 @@
+{
+  "project_name": "GRMHD",
+  "paths": {
+    "output_directory": "ApplicationExamples/GRMHD/GRMHD_cpp",
+    "peano_kernel_path": "./Peano",
+    "log_file": "whatever.log",
+    "exahype_path": "./ExaHyPE"
+  },
+  "architecture": "noarch",
+  "computational_domain": {
+    "dimension": 2,
+    "width": [ 20, 20, 20 ],
+    "offset": [ 0, 0, 0 ],
+    "end_time": 20
+  },
+  "shared_memory": {
+    "cores": 1,
+    "autotuning_strategy": "dummy",
+    "properties_file": "sharedmemory.properties"
+  },
+  "distributed_memory": {
+    "load_balancing_type": "static",
+    "load_balancing_strategy" : "fair",
+    "node_pool_strategy" : "hotspot",
+    "ranks_per_node": 1,
+    "timeout": 60,
+    "buffer_size": 64
+  },
+  "optimisation": {
+    "fuse_algorithmic_steps" : false,
+    "fuse_algorithmic_steps_factor" : 0.99,
+    "spawn_predictor_as_background_thread" : false,
+    "spawn_amr_background_threads" : false,
+    "disable_vertex_exchange_in_time_steps" : true,
+    "time_step_batch_factor" : 0.8,
+    "disable_metadata_exchange_in_batched_time_steps" : false,
+    "double_compression" : 0.0,
+    "spawn_double_compression_as_background_thread" : false
+  },
+  "solvers": [
+    {
+      "name": "GRMHDSolver_FV",
+      "type": "Finite-Volumes",
+      "variables": [
+        { "name": "rho",         "multiplicity": 1 },
+        { "name": "vel",         "multiplicity": 3 },
+        { "name": "E",           "multiplicity": 1 },
+        { "name": "B",           "multiplicity": 3 },
+        { "name": "psi",         "multiplicity": 1 },
+        { "name": "lapse",       "multiplicity": 1 },
+        { "name": "shift",       "multiplicity": 3 },
+        { "name": "gij",         "multiplicity": 6 },
+        { "name": "coordinates", "multiplicity": 3 },
+        { "name": "check",       "multiplicity": 1 }
+      ],
+      "material_parameters": [
+        { "name": "test", "multiplicity": 3 }
+      ],
+      "global_observables": 1,
+      "point_sources": [
+        [ 0.0, 0.0, 0.0 ],
+        [ 0.5, 0.5, 0.5 ]
+      ],
+      "patch_size": 3,
+      "maximum_mesh_size": 5.0,
+      "maximum_mesh_depth": 0,
+      "time_stepping": "global",
+      "fv_kernel": {
+        "implementation": "generic",
+        "terms": [ "flux", "ncp", "source", "point_sources" ],
+        "scheme"  : "godunov"
+      },
+      "plotters": [
+        {
+          "name": "ConservedWriter",
+          "type": "vtk::Cartesian::vertices::ascii",
+          "output": "./vtk-output/conserved",
+          "variables": 17,
+          "repeat": 0.001,
+          "time": 0
+        }
+      ]
+    }
+  ]
+}

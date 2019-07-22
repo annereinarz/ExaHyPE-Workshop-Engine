@@ -1,0 +1,175 @@
+{# /**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/ #}
+
+#include "{{pathToOptKernel}}/converter.h"
+
+
+void {{codeNamespace}}::converter::Qhbnd_optimised2generic(const double* const opt, double* gen) {
+  for(int d=0; d<{{2 * nDim}}; d++) {
+    for(int ij=0; ij<{{nDof*nDof3D}}; ij++) {
+      #pragma omp simd aligned(gen,opt:ALIGNMENT)
+      for(int n=0; n<{{nData}}; n++) {
+        gen[n+{{nData}}*(ij+{{nDof*nDof3D}}*d)] = opt[n+{{nDataPad}}*(ij+{{nDof*nDof3D}}*d)];
+      }
+    }    
+  }
+}
+
+void {{codeNamespace}}::converter::Qhbnd_generic2optimised(const double* const gen, double* opt) {
+  for(int d=0; d<{{2 * nDim}}; d++) {
+    for(int ij=0; ij<{{nDof*nDof3D}}; ij++) {
+      #pragma omp simd aligned(gen,opt:ALIGNMENT)
+      for(int n=0; n<{{nData}}; n++) {
+        opt[n+{{nDataPad}}*(ij+{{nDof*nDof3D}}*d)] = gen[n+{{nData}}*(ij+{{nDof*nDof3D}}*d)];
+      }
+    }    
+  }
+}
+
+void {{codeNamespace}}::converter::Fhbnd_optimised2generic(const double* const opt, double* gen) {
+  for(int d=0; d<{{2 * nDim}}; d++) {
+    for(int ij=0; ij<{{nDof*nDof3D}}; ij++) {
+      #pragma omp simd aligned(gen,opt:ALIGNMENT)
+      for(int n=0; n<{{nVar}}; n++) {
+        gen[n+{{nVar}}*(ij+{{nDof*nDof3D}}*d)] = opt[n+{{nVarPad}}*(ij+{{nDof*nDof3D}}*d)];
+      }
+    }    
+  }
+}
+
+void {{codeNamespace}}::converter::Fhbnd_generic2optimised(const double* const gen, double* opt) {
+  for(int d=0; d<{{2 * nDim}}; d++) {
+    for(int ij=0; ij<{{nDof*nDof3D}}; ij++) {
+      #pragma omp simd aligned(gen,opt:ALIGNMENT)
+      for(int n=0; n<{{nVar}}; n++) {
+        opt[n+{{nVarPad}}*(ij+{{nDof*nDof3D}}*d)] = gen[n+{{nVar}}*(ij+{{nDof*nDof3D}}*d)];
+      }
+    }    
+  }
+}
+
+void {{codeNamespace}}::converter::QFace_optimised2generic(const double* const opt, double* gen) {
+  for(int ij=0; ij<{{nDof*nDof3D}}; ij++) {
+    #pragma omp simd aligned(opt:ALIGNMENT) //gen not always aligned if nor face0
+    for(int n=0; n<{{nData}}; n++) {
+      gen[n+{{nData}}*ij] = opt[n+{{nDataPad}}*ij];
+    }
+  }    
+}
+
+void {{codeNamespace}}::converter::QFace_generic2optimised(const double* const gen, double* opt) {
+  for(int ij=0; ij<{{nDof*nDof3D}}; ij++) {
+    #pragma omp simd aligned(opt:ALIGNMENT) //gen not always aligned if nor face0
+    for(int n=0; n<{{nData}}; n++) {
+      opt[n+{{nDataPad}}*ij] = gen[n+{{nData}}*ij];
+    }
+  }    
+}
+
+void {{codeNamespace}}::converter::FFace_optimised2generic(const double* const opt, double* gen) {
+  for(int ij=0; ij<{{nDof*nDof3D}}; ij++) {
+    #pragma omp simd aligned(opt:ALIGNMENT) //gen not always aligned if nor face0
+    for(int n=0; n<{{nVar}}; n++) {
+      gen[n+{{nVar}}*ij] = opt[n+{{nVarPad}}*ij];
+    }
+  }    
+}
+
+void {{codeNamespace}}::converter::FFace_generic2optimised(const double* const gen, double* opt) {
+  for(int ij=0; ij<{{nDof*nDof3D}}; ij++) {
+    #pragma omp simd aligned(opt:ALIGNMENT) //gen not always aligned if nor face0
+    for(int n=0; n<{{nVar}}; n++) {
+      opt[n+{{nVarPad}}*ij] = gen[n+{{nVar}}*ij];
+    }
+  }    
+}
+
+void {{codeNamespace}}::converter::Qhi_optimised2generic(const double* const opt, double* gen) {
+  for(int j=0; j<{{nDof**nDim}}; j++) {
+    #pragma omp simd aligned(gen,opt:ALIGNMENT)
+    for(int i=0; i<{{nData}}; i++) {
+      gen[i+{{nData}}*j] = opt[i+{{nDataPad}}*j];
+    }
+  }
+}
+
+void {{codeNamespace}}::converter::Qhi_generic2optimised(const double* const gen, double* opt) {
+  for(int j=0; j<{{nDof**nDim}}; j++) {
+    #pragma omp simd aligned(gen,opt:ALIGNMENT)
+    for(int i=0; i<{{nData}}; i++) {
+      opt[i+{{nDataPad}}*j] = gen[i+{{nData}}*j];
+    }
+  }
+}
+
+void {{codeNamespace}}::converter::Fhi_optimised2generic(const double* const opt, double* gen) {
+  for(int b=0; b<{{nDim+1}}; b++) {
+    for(int j=0; j<{{nDof**nDim}}; j++) {
+      #pragma omp simd aligned(gen,opt:ALIGNMENT)
+      for(int i=0; i<{{nVar}}; i++) {
+        gen[i+{{nVar}}*j+b*{{(nDof ** nDim) * nVar}}] = opt[i+{{nVarPad}}*j+b*{{(nDof ** nDim) * nVarPad}}];
+      }
+    }
+  }
+}
+
+void {{codeNamespace}}::converter::Fhi_generic2optimised(const double* const gen, double* opt) {
+  for(int b=0; b<{{nDim+1}}; b++) {
+    for(int j=0; j<{{nDof**nDim}}; j++) {
+      #pragma omp simd aligned(gen,opt:ALIGNMENT)
+      for(int i=0; i<{{nVar}}; i++) {
+        opt[i+{{nVarPad}}*j+b*{{(nDof ** nDim) * nVarPad}}] = gen[i+{{nVar}}*j+b*{{(nDof ** nDim) * nVar}}];
+      }
+    }
+  }
+}
+
+void {{codeNamespace}}::converter::PSi_optimised2generic(const double* const opt, double* gen) {
+  for(int b=0; b<{{nDof+1}}; b++) {
+    for(int j=0; j<{{nDof**nDim}}; j++) {
+      #pragma omp simd aligned(gen,opt:ALIGNMENT)
+      for(int i=0; i<{{nVar}}; i++) {
+        gen[i+{{nVar}}*j+b*{{(nDof ** nDim) * nVar}}] = opt[i+{{nVarPad}}*j+b*{{(nDof ** nDim) * nVarPad}}];
+      }
+    }
+  }
+}
+
+void {{codeNamespace}}::converter::PSi_generic2optimised(const double* const gen, double* opt) {
+  for(int b=0; b<{{nDof+1}}; b++) {
+    for(int j=0; j<{{nDof**nDim}}; j++) {
+      #pragma omp simd aligned(gen,opt:ALIGNMENT)
+      for(int i=0; i<{{nVar}}; i++) {
+        opt[i+{{nVarPad}}*j+b*{{(nDof ** nDim) * nVarPad}}] = gen[i+{{nVar}}*j+b*{{(nDof ** nDim) * nVar}}];
+      }
+    }
+  }
+}
+
+void {{codeNamespace}}::converter::Lduh_optimised2generic(const double* const opt, double* gen) {
+  for(int zyx=0; zyx < {{nDof**nDim}}; zyx++){
+    #pragma omp simd aligned(gen,opt:ALIGNMENT)
+    for(int n=0; n<{{nVar}};n++){
+      gen[zyx*{{nVar}}+n] = opt[zyx*{{nVarPad}}+n];
+    }
+  }
+}
+
+void {{codeNamespace}}::converter::Lduh_generic2optimised(const double* const gen, double* opt) {
+  for(int zyx=0; zyx < {{nDof**nDim}}; zyx++){
+    #pragma omp simd aligned(gen,opt:ALIGNMENT)
+    for(int n=0; n<{{nVar}};n++){
+      opt[zyx*{{nVarPad}}+n] = gen[zyx*{{nVar}}+n];
+    }
+  }
+}

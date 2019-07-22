@@ -1,0 +1,67 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon 
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/
+template <typename SolverType, bool useViscousFlux>
+double kernels::aderdg::generic::c::stableTimeStepSize(
+    SolverType& solver,
+    const double* const luh,
+    const tarch::la::Vector<DIMENSIONS, double>& dx) {
+  constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int numberOfData       = numberOfVariables+numberOfParameters;
+  constexpr int order              = SolverType::Order;
+  constexpr int basisSize          = order+1;
+  constexpr double cflFactor       = SolverType::CFL;
+  
+  constexpr double PNPM[10]  = {1.0,   0.33,  0.17, 0.1,  0.069,
+                                0.045, 0.038, 0.03, 0.02, 0.015};
+
+  const double invDx[2] = { 1.0/dx[0], 1.0/dx[1] };
+  
+  idx3 idx_luh(basisSize, basisSize, numberOfData); // idx_luh(y,x,nVar)
+  
+  double lambda[numberOfVariables] = {0.0};
+  double dt = std::numeric_limits<double>::max();
+  for (int i = 0; i < basisSize; i++) {
+    for (int j = 0; j < basisSize; j++) {
+
+      double denominator = 0.0;
+      for (int d = 0; d < DIMENSIONS; d++) {
+        solver.eigenvalues(&luh[idx_luh(i,j,0)], d, lambda);
+
+        double maxEigenvalue = 0.0;
+        for (int ivar = 0; ivar < numberOfVariables; ivar++) {
+          maxEigenvalue = std::max(std::abs(lambda[ivar]), maxEigenvalue);
+        }
+        if(useViscousFlux){
+            solver.viscousEigenvalues(&luh[idx_luh(i,j,0)], d, lambda);
+
+            double maxEigenvalueV = 0.0;
+            for (int ivar = 0; ivar < numberOfVariables; ivar++) {
+                maxEigenvalueV = std::max(std::abs(lambda[ivar]), maxEigenvalueV);
+            }
+            maxEigenvalue += maxEigenvalueV * (2.0/PNPM[order]) * invDx[d];
+        }
+        denominator += maxEigenvalue * invDx[d];
+      }
+
+      dt = std::min(dt, cflFactor * PNPM[order] / denominator);
+    }
+  }
+
+//   std::cout << "-----------------------------------" << std::endl;
+//   std::cout << "dt="<< dt << std::endl;
+//   std::cout << "order="<< order << std::endl;
+//   std::cout << "basisSize="<< basisSize << std::endl;
+//   std::cout << "-----------------------------------" << std::endl;
+  return dt;
+}

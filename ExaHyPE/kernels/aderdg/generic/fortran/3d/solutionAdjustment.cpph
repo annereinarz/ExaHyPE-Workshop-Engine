@@ -1,0 +1,44 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon 
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/
+#include "../../../../KernelUtils.h" 
+
+template <typename SolverType>
+void kernels::aderdg::generic::fortran::solutionAdjustment(
+    SolverType& solver,
+    double* luh, const tarch::la::Vector<DIMENSIONS, double>& center,
+    const tarch::la::Vector<DIMENSIONS, double>& dx, const double t,
+    const double dt) {
+  const int numberOfVariables  = solver.getNumberOfVariables();
+  const int numberOfParameters = solver.getNumberOfParameters();
+  const int basisSize = solver.getNodesPerCoordinateAxis();
+  
+  idx4 idx_luh(basisSize, basisSize, basisSize, numberOfVariables+numberOfParameters);
+  
+  double x[3];
+
+  for (int i = 0; i < basisSize; i++) {  // loop over dof
+    const double qi = kernels::gaussLegendreNodes[basisSize - 1][i];
+    for (int j = 0; j < basisSize; j++) {
+      const double qj = kernels::gaussLegendreNodes[basisSize - 1][j];
+      for (int k = 0; k < basisSize; k++) {  // loop over dof
+        const double qk = kernels::gaussLegendreNodes[basisSize - 1][k];
+
+        x[0] = center[0] + dx[0] * (qk - 0.5);
+        x[1] = center[1] + dx[1] * (qj - 0.5);
+        x[2] = center[2] + dx[2] * (qi - 0.5);
+
+        solver.adjustPointSolution(x, t, dt, &luh[idx_luh(i,j,k,0)]);
+      }
+    }
+  }
+}

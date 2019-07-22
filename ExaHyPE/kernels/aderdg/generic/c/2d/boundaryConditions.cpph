@@ -1,0 +1,100 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon 
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/
+ 
+#include "kernels/aderdg/generic/Kernels.h"
+
+#include <algorithm>
+
+#if defined(_GLL)
+#include "kernels/GaussLobattoQuadrature.h"
+#else
+#include "kernels/GaussLegendreQuadrature.h"
+#endif      
+
+
+#include "kernels/DGMatrices.h"
+#include "kernels/KernelUtils.h"
+
+#if DIMENSIONS == 2
+
+template <bool useGradientFlux, typename SolverType>
+void kernels::aderdg::generic::c::boundaryConditions(
+                        SolverType& solver,
+                        double* FOut,
+                        double* QOut,
+                        const double* const FIn,
+                        const double* const QIn,
+                        const double* const gradQIn,
+                        const tarch::la::Vector<DIMENSIONS, double>& cellCentre,
+                        const tarch::la::Vector<DIMENSIONS,double>& cellSize,
+                        const double t,const double dt,
+                        const int faceIndex,
+                        const int normalNonZero) {
+  constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int basisSize          = SolverType::Order+1;
+  
+  // Determine if face is "left" (0,2,4) or "right" face (1,2,3).
+  const int f = faceIndex-2*normalNonZero;
+
+  // Determine the free direction from the non-zero normal entry.
+  // @todo(Dominic,31/07/16) I might have confused these directions. Please start here with the debugging.
+  int d1=0;
+  switch(normalNonZero) {
+    case 0:
+      d1=1;
+      break;
+    case 1:
+      d1=0;
+      break;
+    default:
+      assertionMsg(false,"normalNonZero must be either 0 or 1.");
+      break;
+  }
+
+  idx2 idx_Q(basisSize, numberOfVariables+numberOfParameters);
+  idx3 idx_gradQ(basisSize, DIMENSIONS, numberOfVariables);
+
+  idx2 idx_F(basisSize, numberOfVariables);
+ 
+  double x[DIMENSIONS];
+  x[normalNonZero] = cellCentre[normalNonZero] + (-0.5 + f)*cellSize[normalNonZero];
+  for (int i = 0; i < basisSize; i++) {  // loop over dof
+    
+#if defined(_GLL)
+    const double node = kernels::gaussLobattoNodes[basisSize-1][basisSize-1-i];
+#else      
+    const double node = kernels::gaussLegendreNodes[basisSize-1][i];
+#endif      
+    
+    x[d1] = cellCentre[d1] + cellSize[d1] * (node - 0.5);
+
+    if (useGradientFlux) {
+      assertion1(gradQIn != nullptr, useGradientFlux);
+        // TODO(Lukas) Make more elegant if NOT using gradient.
+        solver.boundaryValues(
+                x,t,dt,faceIndex,normalNonZero,
+                FIn  + idx_F(i,0), QIn  + idx_Q(i,0), gradQIn + idx_gradQ(i,0, 0),
+                FOut + idx_F(i,0), QOut + idx_Q(i,0)
+        );
+      } else {
+        solver.boundaryValues(
+                x,t,dt,faceIndex,normalNonZero,
+                FIn  + idx_F(i,0), QIn  + idx_Q(i,0), nullptr,
+                FOut + idx_F(i,0), QOut + idx_Q(i,0)
+        );
+      }
+  }
+}
+
+#endif  // DIMENSIONS == 2

@@ -1,0 +1,69 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has receised funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/
+template <bool useNCP, bool useFlux, bool useViscousFlux, int numQuadPoints, typename SolverType>
+double kernels::finitevolumes::riemannsolvers::c::generalisedOsherSolomon(
+    SolverType&         solver,
+    double* const       fnL, 
+    double* const       fnR, 
+    const double* const qL, 
+    const double* const qR,
+    const int           direction) {
+  if ( useViscousFlux ) {
+    std::cerr << "Only implemented for PDEs with non-viscous conservative flux and/or NCP." << std::endl;
+    std::terminate();
+  }
+  constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+
+  double osherMatrix[numberOfVariables][numberOfVariables] = {0.0}; // fill with zeroes
+  double osherNCP[numberOfVariables] = {0.0};                       // fill with zeroes
+  double s_max = kernels::riemannsolvers::util::computeOsherMatrix<useNCP,
+      useFlux,numberOfVariables,numberOfParameters,numQuadPoints,SolverType>(
+          solver,qL,qR,direction,osherMatrix,osherNCP);
+   
+  if (useFlux && !useViscousFlux) {
+    double FL2[DIMENSIONS][numberOfVariables] = {0.0}; // Q: Can we skip this memset?
+    double FR2[DIMENSIONS][numberOfVariables] = {0.0};
+    
+    #if DIMENSIONS==3
+    double* FL[DIMENSIONS]={FL2[0], FL2[1], FL2[2]};
+    double* FR[DIMENSIONS]={FR2[0], FR2[1], FR2[2]};
+    #else
+    double* FL[DIMENSIONS]={FL2[0], FL2[1]};
+    double* FR[DIMENSIONS]={FR2[0], FR2[1]};
+    #endif
+    solver.flux(qR, FR);
+    solver.flux(qL, FL);
+    
+    for(int i=0; i < numberOfVariables; i++) {
+      fnL[i] = 0.5 * (FR2[direction][i] + FL2[direction][i]);
+      for(int a=0; a < numberOfVariables; a++) {
+        fnL[i] -= 0.5 * osherMatrix[i][a] * ( qR[a] - qL[a] );
+      }
+    }
+  } else {
+    std::fill_n(fnL,numberOfVariables,0);
+  }
+
+  if(useNCP) {
+    for(int i=0; i < numberOfVariables; i++) {
+      fnR[i] = fnL[i] - 0.5 * osherNCP[i];
+    }
+    for(int i=0; i < numberOfVariables; i++) {
+      fnL[i] = fnL[i] + 0.5 * osherNCP[i];
+    }
+  } else {
+    std::copy_n(fnL,numberOfVariables,fnR);  
+  }
+  return s_max;
+}

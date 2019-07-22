@@ -1,0 +1,114 @@
+/**
+ * @page "PIDT"
+
+
+
+!!! Using the built-in pidt variant:
+
+- Create your particles and make them inherit from PIDTParticle due to
+ 
+    Extends: PIDTParticle.def;
+    
+  When you run DaStGen on this file - a call might read as
+  
+    java -jar ~/workspace/src-peano/pdt/lib/DaStGen.jar --plugin PeanoHeapSnippetGenerator --naming PeanoHeapNameTranslator --align  --include ./particles picard/Particle.def  picard/records
+    
+  ensure that you add the particles directory to your include paths.
+  
+
+- Set up your state, cell, and vertex and make each one inherit from the 
+  corresponding pidt class, i.e. insert
+  
+    Extends: ../toolboxes/particles/PIDTCell.def;
+    Extends: ../toolboxes/particles/PIDTState.def;
+    Extends: ../toolboxes/particles/PIDTVertex.def;
+    
+  into your def files. Unfortunately, we do not support search paths through 
+  PDT yet (for the DaStGen precompiler), so you have to use relative paths 
+  here.
+  
+
+- Add a typedef to your vertex's header file that identifies the type of heap 
+  to use:
+
+    typedef peano::heap::PlainHeap<MyFullQualifiedParticle>  MyParticleHeap;
+    
+  To make this work, you also need an include for your particle and the heap:
+  
+    #include "peano/heap/Heap.h"
+
+
+- Create your specification file and add the predefined mapping
+
+    merge-with-predefined-mapping: pidt(MyParticleHeap,see discussion on default parameters below)
+
+  to all of your adapters. You may change the name of MyParticleHeap, but then 
+  you have change it both in the typedef and the specification file.
+ 
+ 
+- Add the following four statements to your vertex definition in the spec file. 
+  It creates all the getters and setters required by the predefined mappings:
+  
+  vertex:
+    dastgen-file: Vertex.def
+    read scalar(int):      PidtVertexIndex
+    ...
+    write scalar(int):     PidtVertexIndex
+
+    
+- For debugging, it pays of to insert 
+    _vertexData.setPidtVertexIndex(-1);
+  into the standard constructor.
+
+  
+There is also a plotter available visualising your particles as vtk. It accepts two 
+arguments: the heap name (MyParticleHeap in the example above) and a filename that's 
+used to write the particles to.
+
+
+!!! Default parameter
+
+By default, pidt plugs into the following events:
+
+- destroyHangingVertex lifts all particles
+- destroyVertex lifts all particles
+- touchVertexLastTime lifts all particles not contained in dual cell
+- leaveCell implements the linked list
+- descend works on the whole tree and drops the particles into the children of the current node
+
+Only operation touchVertexFirstTime() is called only on the leaves. The default parameters thus are
+
+  MyParticleHeap,isRefined,isHangingNode,true
+
+
+- PARAM0: Is the heap name and not a default parameter. This is the only thing you have to do something. (string)
+- PARAM1: Identifies all refined cells where particles can be. (any-getter,isRefined; default isRefined)
+- PARAM2: Identifies vertices that are to be destroyed or that are hanging nodes. (any-getter,isHangingNode(); default isHangingNode()) 
+- PARAM3: Identifies whether the adapter shall create and destroy new heap indices. If set to false, it uses the ones preset (default true)
+- PARAM4: Identifies whether the adapter shall reduce data. If set false, you have to take care that all reductions and worker-master data
+          exchanges are done properly; default true 
+
+The last parameter allows you to merge multiple particle handling schemes with only one scheme taking care about all the indices.
+
+
+!!! Do not sort particles into finest level
+
+Create your own cell markup and ensure that the grid consistency is preserved. Define
+
+pdeSpecificFineGridCell()
+pdeSpecificHangingOrDestroyedVertex()
+
+and replace the default parameters by
+
+  MyParticleHeap,pdeSpecificFineGridCell,pdeSpecificHangingOrDestroyedVertex,true,true
+
+
+!!! Realising raPIDT
+
+To use raPIDT, you have to ensure that the field maxDx per particle identifies 
+the largest update any component of your position can experience in the next 
+update step. By default, this value is set to the maximum of a double, i.e. 
+raPIDT never kicks in. 
+  
+
+ */

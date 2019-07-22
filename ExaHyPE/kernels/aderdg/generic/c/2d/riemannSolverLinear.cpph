@@ -1,0 +1,154 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/
+
+#include <algorithm>
+
+#include "../../../../KernelUtils.h"
+#include "../../../../RiemannSolverUtils.h"
+
+namespace kernels {
+namespace aderdg {
+namespace generic {
+namespace c {
+
+template <bool useFlux, bool useNCP, bool useMM, typename SolverType>
+void riemannSolverLinear(SolverType& solver, double* FL, double* FR,
+                         const double* const QL, const double* const QR,
+                         const double t,
+                         const double dt,
+                         const int direction) {
+  /*
+   * For the linear kernels, we need the material parameters in the
+   * extrapolated predictor.
+   * We compute the averages of the material parameters but
+   * do not use them in the max eigenvalue calculation.
+   * 
+   * Consider numberOfParameters in:
+   * QL,QR,QavL,QavR,Qdiff
+   * 
+   * Not necessary to consider numberOfParameters in
+   * FL,FR,LL,LR
+   */
+
+  constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int numberOfData       = numberOfVariables+numberOfParameters;
+  constexpr int basisSize          = SolverType::Order+1;
+  
+  // Compute the average variables and parameters from the left and the right
+  double QavL[numberOfData] = {0.0}; // size: numberOfVariables+numberOfParameters
+  double QavR[numberOfData] = {0.0}; // size: numberOfVariables+numberOfParameters
+  kernels::riemannsolvers::util::averageRiemannInputs<basisSize,numberOfData>(
+      QL,kernels::gaussLegendreWeights,QavL);
+  kernels::riemannsolvers::util::averageRiemannInputs<basisSize,numberOfData>(
+      QR,kernels::gaussLegendreWeights,QavR);
+
+  //get abs max eigenvalue
+  double LL[numberOfVariables] = {0.0}; 
+  double LR[numberOfVariables] = {0.0}; 
+  solver.eigenvalues(QavL, direction, LL);
+  solver.eigenvalues(QavR, direction, LR);
+  std::transform(LL, LL + numberOfVariables, LL, std::abs<double>);
+  std::transform(LR, LR + numberOfVariables, LR, std::abs<double>);
+  const double* smax_L = std::max_element(LL, LL + numberOfVariables);
+  const double* smax_R = std::max_element(LR, LR + numberOfVariables);
+  const double  smax   = std::max(*smax_L, *smax_R);
+
+  double Qdiff[numberOfData] = {0.0};
+  double Qavg[numberOfData] = {0.0};
+
+  idx2 idx_2d(DIMENSIONS, numberOfVariables);
+  
+  double flux_vec[numberOfVariables*DIMENSIONS] = {0.0};
+  double* flux[DIMENSIONS];
+  
+  flux[0] = &flux_vec[idx_2d(0,0)];
+  flux[1] = &flux_vec[idx_2d(1,0)];
+  
+  double ncp_vec[numberOfVariables*DIMENSIONS] = {0.0};
+  double* ncp[DIMENSIONS];
+  
+  ncp[0] = &ncp_vec[idx_2d(0,0)];
+  ncp[1] = &ncp_vec[idx_2d(1,0)];
+  
+  double gradQ_vec[numberOfVariables*DIMENSIONS] = {0.0};
+  double* gradQ[DIMENSIONS];
+  
+  gradQ[0] = &gradQ_vec[idx_2d(0,0)];
+  gradQ[1] = &gradQ_vec[idx_2d(1,0)];
+
+  for(int l = 0; l < numberOfData; l++) {
+    Qavg[l] = 0.5 *  (QavR[l] + QavL[l]);
+  }
+
+  //We copy the averaged material parameters to Qdiff as they are used in the flux term
+  //These must not be overritten !
+  for(int l = numberOfVariables; l < numberOfData; l++) {
+    Qdiff[l] = Qavg[l];
+  }
+ 
+  {
+    idx2 idx_FLR(basisSize, numberOfVariables);
+    idx2 idx_QLR(basisSize, numberOfData);    
+    std::fill_n (FL, basisSize * numberOfVariables, 0.0);
+    std::fill_n (FR, basisSize * numberOfVariables, 0.0);
+
+    for (int j = 0; j < basisSize; j++) {
+      for(int l = 0 ; l< numberOfVariables ; l++){ 
+        Qdiff[l] = 0.5 * (QR[idx_QLR(j, l)] - QL[idx_QLR(j, l)]);
+      }
+
+      std::copy_n(Qdiff,numberOfVariables,gradQ[0]);
+      std::copy_n(Qdiff,numberOfVariables,gradQ[1]);
+      
+    
+      if(useNCP) {
+        solver.nonConservativeProduct(Qavg, gradQ, ncp);
+        
+        if(useMM){
+          solver.multiplyMaterialParameterMatrix(Qavg, ncp);
+        }
+        
+        for(int l=0; l < numberOfVariables; l++) {
+          FL[idx_FLR(j, l)] += ncp[direction][l];
+          FR[idx_FLR(j, l)] += ncp[direction][l];
+        }
+      }
+      
+      if(useFlux){
+        solver.flux(Qdiff, flux);
+
+        if(useMM){
+          solver.multiplyMaterialParameterMatrix(Qavg, flux);
+        }
+  
+        for(int l=0; l < numberOfVariables; l++) {
+          FL[idx_FLR(j, l)] +=  flux[direction][l];
+          FR[idx_FLR(j, l)] +=  flux[direction][l];
+        }
+      }
+
+      for(int l=0; l < numberOfVariables; l++) {
+        FL[idx_FLR(j, l)] -= smax*Qdiff[l];
+        FR[idx_FLR(j, l)] += smax*Qdiff[l];
+      }
+    }
+  }
+
+}
+
+
+}  // namespace c
+}  // namespace generic
+}  // namespace aderdg
+}  // namespace kernels

@@ -1,0 +1,84 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon 
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/
+
+#include <algorithm> // fill_n
+//#include "kernels/DGMatrices.h"
+//#include "kernels/GaussLegendreQuadrature.h"
+#include "kernels/KernelUtils.h"
+#include "kernels/computeGradients.cpph"
+
+
+namespace kernels {
+namespace aderdg {
+namespace generic {
+namespace c {
+
+// define a smallish for loop. Only local in this file.
+#define ford(i) for(int i=0; i<DIMENSIONS; i++)
+
+/**
+ * This is a hacky attemp to implement the Loehner scheme for an AMR criterion for
+ * our ADERDG kernels.
+ * 
+ * Input:  Solution on complete patch;
+ *         Variable position inside solution where you want to compute the criterion
+ *         on. We might think of having this more generic later on;
+ *         Parmeters such as patch size, numberOfVariables, order
+ *
+ * Output: The estimator Xi(Phi) on the whole patch. Xi has extends Xi(basisSize,basisSize,basisSize)
+ *         as it is a scalar field.
+ * 
+ * ALERT This is not yet finished.
+ **/
+template<typename SolverType>
+inline void computeLoehner(double* Xi, const double* const u, const int PhiIndex, const tarch::la::Vector<DIMENSIONS, double>& sizeOfPatch) {
+	constexpr int numberOfVariables = SolverType::NumberOfVariables;
+	constexpr int order = SolverType::Order;
+	constexpr int basisSize = order + 1;
+	constexpr int basisX = basisSize;
+	constexpr int basisY = basisSize;
+	constexpr int basisZ = DIMENSIONS == 3 ? basisSize : 1;
+	
+	// first derivative
+	double dPhi[DIMENSIONS][basiSizeD(basisSize)];
+	ford(d) computeGradQi(dPhi[d], u, d, PhiIndex, sizeOfPatch, numberOfVariables, order);
+	
+	// second derivative
+	double ddPhi[DIMENSIONS][DIMENSIONS][basisSizeD(basisSize)];
+	ford(d0) ford(d1) computeGradQi(ddPhi[d0][d1], dPhi[d0], d1, 0, sizeOfPatch, 1, order);
+	
+	// compute the loehner thing pointwise
+	index idx_Xi(basisZ, basisY, basisX);
+	dfor(i) {
+		int here = idx_Xi(DIMENSIONS==3 ? i(2) : 0,i(1),i(0));
+		
+		// nominator
+		double normLaplacePhi = 0;
+		ford(k) ford(l) normLaplacePhi += ddPhi[k][l][here]*ddPhi[k][l][here];
+		
+		// denominator
+		double normGradPhi = 0;
+		// what is i in this?
+		// ford(k) ford(l) normGradPhi += dPhi[l+1][here] + dPhi[l-1][here]
+		// TODO continue here.
+		
+		Xi[here] = std::sqrt( normLaplacePhi / normGradPhi );
+	}
+}
+
+#undef ford
+	
+} // c
+} // generic
+} // aderdg
+} // kernels

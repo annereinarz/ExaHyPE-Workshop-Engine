@@ -1,0 +1,96 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon 
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/
+ 
+// #include "kernels/aderdg/generic/Kernels.h"
+
+// #include "string.h"
+
+// #include "tarch/la/Scalar.h"
+// #include "tarch/la/ScalarOperations.h"
+
+// #include "kernels/GaussLegendreQuadrature.h"
+// #include "kernels/DGMatrices.h"
+
+// #define EXAHYPE_CFL_FACTOR 0.9
+
+// #include <fstream>
+
+// using std::endl;
+// using std::cout;
+
+extern "C" {
+void aderriemannsolverlinear_(const double* const lQbndL, double* lFbndL, const double* const lQbndR,
+                        double* lFbndR, double* nv);
+}
+
+// todo Dominic Etienne Charrier
+// Possibly redundant definition of face indices
+// see exahype/solvers/Solver.h
+// On the other hand, the kernels should be
+// more or less independent of ExaHyPE/exahype.
+#define EXAHYPE_FACE_LEFT 0
+#define EXAHYPE_FACE_RIGHT 1
+#define EXAHYPE_FACE_FRONT 2
+#define EXAHYPE_FACE_BACK 3
+#define EXAHYPE_FACE_BOTTOM 4
+#define EXAHYPE_FACE_TOP 5
+
+// todo change template parameter in header and generator
+// template <void PDEFlux2d(const double * const Q, double * f, double * g)>
+template <typename SolverType>
+void kernels::aderdg::generic::fortran::riemannSolverLinear(
+    SolverType& solver,
+    double* FL, double* FR, const double* const QL,
+    const double* const QR,
+    const double t,
+    const double dt,
+    const int normalNonZero){
+
+  double nv[3];
+  nv[0] = 0.0;
+  nv[1] = 0.0;
+  nv[2] = 0.0;
+  nv[normalNonZero] = 1.0;
+
+  aderriemannsolverlinear_(QL, FL, QR, FR, nv);
+
+  // // Permutation of lQbnd
+
+  // // for(int i=0; i < numberOfVariables*6*basisSize*basisSize; i++){
+  // // lFbndFortran[i] = i;
+  // // }
+
+  // for (int bb=0; bb<basisSize; bb++) {  // loop over dof
+  // for (int aa=0; aa<basisSize; aa++) {
+  // for(int ivar=0; ivar < numberOfVariables; ivar++) {
+  // for(int face=0; face < 6; face++) {
+  // lQbnd[p2f4(ivar, face, aa, bb)] = lQbndFortran[f2p4(ivar, face, aa, bb)];
+  // }
+  // }
+  // }
+  // }
+
+  // std::ofstream ofs;
+  // ofs.open ("aoutput_lQbnd.txt", std::ofstream::out);
+  // for (int ii=0; ii<numberOfVariables*6*basisSize*basisSize; ii++) {
+  // ofs << lQbnd[ii] << "\n";
+  // }
+  // ofs.close();
+
+  // ofs.open ("aoutput_lQbndFortran.txt", std::ofstream::out);
+  // for (int ii=0; ii<numberOfVariables*6*basisSize*basisSize; ii++) {
+  // ofs << lQbndFortran[ii] << "\n";
+  // }
+  // ofs.close();
+
+}

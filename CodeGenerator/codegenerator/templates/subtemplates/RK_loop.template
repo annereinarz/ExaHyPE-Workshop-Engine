@@ -1,0 +1,73 @@
+{#
+  String inputLuh : name of the inputTensor (e.g. luh or lwh)
+  int    inputLuh_dataSize
+  String outputKi : name of the output tensor (e.g. K1 or K2)
+#}
+{# /********************
+   **** Subtemplate ****
+   *********************/ #}
+{% import 'subtemplates/macros.template' as m with context %}{# get template macros #}
+{% if useFlux %}
+
+  // Flux component
+
+{# /******************************************************
+   **** call to flux function over {{inputLuh}} into lF_guess ****
+   ******************************************************/ #}
+{% with inputQ=inputLuh, inputQ_dataSize=nData, outputF='lF_guess', timeInterleaved=False, time_var='0' %}
+{% filter indent(width=2, indentfirst=True) %}{% include 'subtemplates/flux_PDE_over_xyz.template' %}{% endfilter %}
+{% endwith %}
+
+  // x direction
+  for (int yz = 0; yz < {{nDof*nDof3D}}; yz++) {
+    {{ m.matmul('gradF_x_RKLoop', 'lF_guess', 'dudxT_by_dx', outputKi, 'yz*'~nVarPad*nDof, '0', 'yz*'~nVarPad*nDof) | indent(4) }}{##}
+  }
+  
+  // y direction
+  for (int z = 0; z < {{nDof3D}}; z++) {
+    for (int x = 0; x < {{nDof}}; x++) {
+      {{ m.matmul('gradF_y_RKLoop', 'lF_guess', 'dudxT_by_dx', outputKi, '(z*'~nDof*nDof~'+x)*'~nVarPad~'+'~(nDof**nDim)*nVarPad, '0', '(z*'~nDof*nDof~'+x)*'~nVarPad) | indent(6) }}{##}
+    }
+  }
+  
+{% if nDim==3 %}
+  // z direction
+  for (int xy = 0; xy < {{nDof*nDof}}; xy++) {
+    {{ m.matmul('gradF_z_RKLoop', 'lF_guess', 'dudxT_by_dx', outputKi, 'xy*'~nVarPad~'+'~2*(nDof**nDim)*nVarPad, '0', 'xy*'~nVarPad) | indent(4) }}{##}
+  }
+{% endif %}{# nDim == 3 #}
+{% endif %}{# useFlux #}
+{% if useNCP %}
+  
+  //NCP component
+  std::memset(gradQ, 0, {{nDim*(nDof**nDim)*nVarPad}} * sizeof(double)); //reset gradQ to 0
+  
+  // x direction
+  for (int yz = 0; yz < {{nDof*nDof3D}}; yz++) {
+    {{ m.matmul('gradQ_x_RKLoop', inputLuh, 'dudxT_by_dx', 'gradQ', 'yz*'~nData*nDof, '0', 'yz*'~nVarPad*nDof) | indent(4) }}{##}
+  }
+  
+  // y direction
+  for (int z = 0; z < {{nDof3D}}; z++) {
+    for (int x = 0; x < {{nDof}}; x++) {
+      {{ m.matmul('gradQ_y_RKLoop', inputLuh, 'dudxT_by_dx', 'gradQ', '(z*'~nDof*nDof~'+x)*'~nData, '0', '(z*'~nDof*nDof~'+x)*'~nVarPad~'+'~nVarPad*(nDof**nDim)) | indent(6) }}{##}
+    }
+  }
+  
+{% if nDim == 3 %}
+  // z direction
+  for (int xy = 0; xy < {{nDof*nDof}}; xy++) {
+    {{ m.matmul('gradQ_z_RKLoop', inputLuh, 'dudxT_by_dx', 'gradQ', 'xy*'~nData, '0', 'xy*'~nVarPad~'+'~2*nVarPad*(nDof**nDim)) | indent(4) }}{##}
+  }
+{% endif %}
+
+
+  {
+{# /***********************************************************
+   **** call to Source and NCP (or FusedSource) functions ****
+   ***********************************************************/ #}
+{% with time_var='0', inputQ=inputLuh, output=outputKi, writeSource=False, multiplyByWeights=False, substractToOutput=True, inputQ_dataSize=inputLuh_dataSize, timeInterleaved=False %}
+{% filter indent(width=4, indentfirst=True) %}{% include 'subtemplates/source_ncp_PDE_over_xyz.template' %}{% endfilter %}
+{% endwith %}
+  }
+{% endif %}

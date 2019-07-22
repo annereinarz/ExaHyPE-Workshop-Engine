@@ -1,0 +1,40 @@
+component: MyFancyPETScProject
+
+namespace: ::petsc
+
+vertex:
+  dastgen-file: Vertex.def
+  read scalar(int): Index   // mind the uppercase
+  write scalar(int): Index
+  
+cell:
+  dastgen-file: Cell.def
+
+state:
+  dastgen-file: State.def
+
+event-mapping:
+  name: CreateGrid
+
+event-mapping:
+  name: Enumerate
+
+event-mapping:
+  name: Assemble
+
+adapter:
+  name: CreateGrid
+  merge-with-user-defined-mapping: CreateGrid
+
+adapter:
+  name: Enumerate
+  merge-with-user-defined-mapping: Enumerate
+
+adapter:
+  name: Assemble
+  merge-with-user-defined-mapping: Assemble
+ 
+adapter:
+  name: Plot
+  merge-with-predefined-mapping: VTKPlotVertexValue(result,getU,u)
+ 

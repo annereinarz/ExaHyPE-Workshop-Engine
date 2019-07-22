@@ -1,0 +1,58 @@
+{
+  "project_name": "Euler",
+  "paths": {
+    "output_directory": "ApplicationExamples/TestCases/nonlinear_vectorized_Euler_3d",
+    "peano_kernel_path": "./Peano",
+    "log_file": "whatever.log",
+    "exahype_path": "./ExaHyPE"
+  },
+  "architecture": "hsw",
+  "computational_domain": {
+    "dimension": 3,
+    "width": [ 9.0, 9.0, 3.0 ],
+    "offset": [ 0, 0, 3.0 ],
+    "time_steps": 201
+  },
+  "optimisation": {
+    "fuse_algorithmic_steps" : true,
+    "fuse_algorithmic_steps_factor" : 0.99,
+    "spawn_predictor_as_background_thread" : false,
+    "spawn_amr_background_threads" : false,
+    "disable_vertex_exchange_in_time_steps" : true,
+    "time_step_batch_factor" : 0.8,
+    "disable_metadata_exchange_in_batched_time_steps" : false,
+    "double_compression" : 0.0,
+    "spawn_double_compression_as_background_thread" : false
+  },
+  "solvers": [
+    {
+      "name": "EulerSolver_ADERDG",
+      "type": "ADER-DG",
+      "variables": 5,
+      "order": 6,
+      "maximum_mesh_size": 1.0,
+      "maximum_mesh_depth": 0,
+      "time_stepping": "global",
+      "aderdg_kernel": {
+        "implementation": "optimised",
+        "space_time_predictor" : { "cerkguess" : true },
+        "optimised_kernel_debugging": ["flops"],
+        "terms": [ "flux" ],
+        "optimised_terms": ["flux_vect"],
+        "language" : "C",
+        "nonlinear"  : true,
+        "basis" : "Legendre"
+      },
+      "plotters": [
+        {
+          "name": "ConservedQuantitiesWriter",
+          "type": "vtk::Legendre::cells::ascii",
+          "output": "./conserved",
+          "variables": 5,
+          "repeat": 0.0355,
+          "time": 0
+        }
+      ]
+    }
+  ]
+}

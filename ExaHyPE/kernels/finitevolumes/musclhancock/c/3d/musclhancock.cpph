@@ -1,0 +1,466 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/
+#include <tarch/Assertions.h>
+#include <cmath>
+#include <limits>
+#include <utility>
+#include <vector>
+#include <algorithm>
+
+#include "tarch/la/Vector.h"
+#include "kernels/KernelUtils.h"
+
+#include "kernels/finitevolumes/riemannsolvers/c/riemannsolvers.h"
+
+#if DIMENSIONS == 3
+
+// TODO(Dominic): Work in progress
+/**
+ * Solves all the Riemann problems that do only require
+ * internal data and add the result directly onto the
+ * new solution.
+ * Finally add the source terms.
+ */
+template <
+	bool useSource, bool useNCP, bool useFlux, bool useViscousFlux, 
+	bool robustDiagonalLimiting,
+	kernels::finitevolumes::commons::c::slope_limiter slope_limiter,
+	typename SolverType
+	>
+double kernels::finitevolumes::musclhancock::c::solutionUpdate(
+    SolverType& solver,double* luh,
+    const tarch::la::Vector<DIMENSIONS, double>& cellCenter,
+    const tarch::la::Vector<DIMENSIONS, double>& dx,
+    const double t,
+    double dt) {
+  constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int numberOfData       = numberOfVariables+numberOfParameters;
+  constexpr int patchSize          = SolverType::PatchSize;
+  constexpr int ghostLayerWidth    = SolverType::GhostLayerWidth;
+  constexpr int patchBegin         = ghostLayerWidth; // patchBegin cell is inside domain
+  constexpr int patchEnd           = patchBegin+patchSize; // patchEnd cell is outside domain
+  constexpr double cflFactor       = CFL; // This is not SolverType::CFL; see the docu.
+
+  const double cellSize[3]           = {dx[0]/patchSize, dx[1]/patchSize, dx[2]/patchSize};
+  const double invCellSize[3]        = {1./cellSize[0],1./cellSize[1],1./cellSize[2]};
+  const double invCellSizeTimesDt[3] = {dt*invCellSize[0], dt*invCellSize[1], dt*invCellSize[2]};
+
+  tarch::la::Vector<DIMENSIONS, double> x; // Location of volume.
+
+  // 0. Copy old solution into temporary variable
+  constexpr int stride       = patchSize+2*ghostLayerWidth;
+  constexpr int dataPerPatch = stride*stride*stride*numberOfData;
+  double luhOld[dataPerPatch];
+  std::copy_n(luh,dataPerPatch,luhOld);
+
+  // 1. Gather data from neighbouring cells; already done.
+
+  // 2. Compute slopes TODO(Dominic): Make sure to only consider parameters in luh
+  idx4 idx(stride, stride, stride, numberOfData);
+  idx5 idx_slope(stride,stride,stride,DIMENSIONS,numberOfVariables);
+
+  constexpr int variablesPerPatch = stride*stride*stride*numberOfData;
+  double slope[variablesPerPatch*DIMENSIONS] = {0.0};
+
+  // This musclhancock does not yet use 2. ghostlayer.
+  // slopex
+  for(int i = patchBegin-1; i < patchEnd+1; i++) { // z
+    for (int j = patchBegin-1; j < patchEnd+1; j++) { // y 
+      for (int k = patchBegin-1; k < patchEnd+1; k++) { // x
+        for (int l = 0; l < numberOfData; l++) {
+          slope[idx_slope(i, j, k, 0, l)] =
+              slope_limiter(luhOld[idx(i, j, k + 1, l)] - luhOld[idx(i, j, k, l)],
+                  luhOld[idx(i, j, k, l)] - luhOld[idx(i, j, k - 1, l)]) * invCellSize[0];
+        }
+      }
+    }
+  }
+  // slopey
+  for(int i = patchBegin-1; i < patchEnd+1; i++) { // z 
+    for (int j = patchBegin-1; j < patchEnd+1; j++) { // y
+      for (int k = patchBegin-1; k < patchEnd+1; k++) { // x
+        for (int l = 0; l < numberOfData; l++) {
+          slope[idx_slope(i, j, k, 1, l)] = 
+              slope_limiter(luhOld[idx(i, j + 1, k, l)] - luhOld[idx(i, j, k, l)],
+                  luhOld[idx(i, j, k, l)] - luhOld[idx(i, j - 1, k, l)]) * invCellSize[1];
+        }
+      }
+    }
+  }
+  // slopez
+  for(int i = patchBegin-1; i < patchEnd+1; i++) { // z
+    for (int j = patchBegin-1; j < patchEnd+1; j++) { // y x TODO new
+      for (int k = patchBegin-1; k < patchEnd+1; k++) { // x TODO new
+        for (int l = 0; l < numberOfData; l++) {
+          slope[idx_slope(i, j, k, 2, l)] = 
+              slope_limiter(luhOld[idx(i + 1, j, k, l)] - luhOld[idx(i, j, k, l)],
+                  luhOld[idx(i, j, k, l)] - luhOld[idx(i -1, j, k, l)]) * invCellSize[2];
+        }
+      }
+    }
+  }
+  
+  // TODO(JM): Please optimise
+  if ( robustDiagonalLimiting ) {
+    // Zero the first ghost layer cell slopes where one neighbour datum is missing
+    //
+    // Derivation: Go to the begin or end of a patch in x-direction: x \in \{patchBegin,patchEnd-1\}.
+    // In y-direction, go before the begin or after the end of the patch: y \in \{patchBegin-1,patchEnd\}.
+    // The respective solution datum is given from a face neighbour. However, a datum in x-direction right
+    // beside its position was not obtained from a diagonal neighbour.
+    // At the boundary between face neighbour and diagonal neighbour, the x-slope cannot
+    // be computed. Slope limiting is not possible. The slope is set to zero.
+    for( int i = patchBegin-1; i < patchEnd+1; i++ ) {  
+      // z-slope<-0 (z       y       x          slope var)                              
+      std::fill_n(&slope[idx_slope(patchBegin, patchBegin-1, i, 2, 0)],numberOfVariables,0.0);
+      std::fill_n(&slope[idx_slope(patchBegin, patchEnd    , i, 2, 0)],numberOfVariables,0.0);
+      std::fill_n(&slope[idx_slope(patchEnd-1, patchBegin-1, i, 2, 0)],numberOfVariables,0.0);
+      std::fill_n(&slope[idx_slope(patchEnd-1, patchEnd    , i, 2, 0)],numberOfVariables,0.0);
+    
+      std::fill_n(&slope[idx_slope(patchBegin, i, patchBegin-1, 2, 0)],numberOfVariables,0.0);
+      std::fill_n(&slope[idx_slope(patchBegin, i, patchEnd    , 2, 0)],numberOfVariables,0.0);
+      std::fill_n(&slope[idx_slope(patchEnd-1, i, patchBegin-1, 2, 0)],numberOfVariables,0.0);
+      std::fill_n(&slope[idx_slope(patchEnd-1, i, patchEnd    , 2, 0)],numberOfVariables,0.0);
+      
+      // y-slope<-0  (z       y       x slope var)
+      std::fill_n(&slope[idx_slope(patchBegin-1, patchBegin, i, 1, 0)],numberOfVariables,0.0);
+      std::fill_n(&slope[idx_slope(patchEnd,     patchBegin, i, 1, 0)],numberOfVariables,0.0);
+      std::fill_n(&slope[idx_slope(patchBegin-1, patchEnd-1, i, 1, 0)],numberOfVariables,0.0);
+      std::fill_n(&slope[idx_slope(patchEnd,     patchEnd-1, i, 1, 0)],numberOfVariables,0.0);
+      
+      std::fill_n(&slope[idx_slope(i, patchBegin, patchBegin-1, 1, 0)],numberOfVariables,0.0);
+      std::fill_n(&slope[idx_slope(i, patchBegin, patchEnd,     1, 0)],numberOfVariables,0.0);
+      std::fill_n(&slope[idx_slope(i, patchEnd-1, patchBegin-1, 1, 0)],numberOfVariables,0.0);
+      std::fill_n(&slope[idx_slope(i, patchEnd-1, patchEnd,     1, 0)],numberOfVariables,0.0);
+      
+      // x-slope<-0 (z       y       x slope var)   
+      std::fill_n(&slope[idx_slope(i, patchBegin-1, patchBegin, 0, 0)],numberOfVariables,0.0);
+      std::fill_n(&slope[idx_slope(i, patchEnd    , patchBegin, 0, 0)],numberOfVariables,0.0);
+      std::fill_n(&slope[idx_slope(i, patchBegin-1, patchEnd-1, 0, 0)],numberOfVariables,0.0);
+      std::fill_n(&slope[idx_slope(i, patchEnd    , patchEnd-1, 0, 0)],numberOfVariables,0.0);
+  
+      std::fill_n(&slope[idx_slope(patchBegin-1, i, patchBegin, 0, 0)],numberOfVariables,0.0);
+      std::fill_n(&slope[idx_slope(patchEnd    , i, patchBegin, 0, 0)],numberOfVariables,0.0);
+      std::fill_n(&slope[idx_slope(patchBegin-1, i, patchEnd-1, 0, 0)],numberOfVariables,0.0);
+      std::fill_n(&slope[idx_slope(patchEnd    , i, patchEnd-1, 0, 0)],numberOfVariables,0.0);
+    }
+  }
+
+  // 3.Boundary extrapolation (left and right value per face)
+  idx4 idx_w(stride,stride,stride,numberOfData);
+  double wLx[variablesPerPatch] = {0.0};
+  double wLy[variablesPerPatch] = {0.0};
+  double wLz[variablesPerPatch] = {0.0};
+  double wRx[variablesPerPatch] = {0.0};
+  double wRy[variablesPerPatch] = {0.0};
+  double wRz[variablesPerPatch] = {0.0};
+
+  // wx
+  //  for(int i = patchBegin; i < patchEnd; i++) { // z // TODO previous
+  //    for (int j = patchBegin; j < patchEnd; j++) { // y
+  for(int i = patchBegin-1; i < patchEnd+1; i++) { // z
+    for (int j = patchBegin-1; j < patchEnd+1; j++) { // y TODO new
+      for (int k = patchBegin-1; k < patchEnd+1; k++) {
+        for (int l = 0; l < numberOfData; l++) {
+          wLx[idx_w(i, j, k, l)] = luhOld[idx(i, j, k, l)] - 0.5 * cellSize[0] * slope[idx_slope(i, j, k, 0, l)];
+          wRx[idx_w(i, j, k, l)] = luhOld[idx(i, j, k, l)] + 0.5 * cellSize[0] * slope[idx_slope(i, j, k, 0, l)];
+        }
+      }
+    }
+  }
+  // wy
+  //  for(int i = patchBegin; i < patchEnd; i++) { // z // TODO previous
+  for(int i = patchBegin-1; i < patchEnd+1; i++) { // z TODO new
+    for (int j = patchBegin-1; j < patchEnd+1; j++) { // y
+      //      for (int k = patchBegin; k < patchEnd; k++) { // x / TODO previous
+      for (int k = patchBegin-1; k < patchEnd+1; k++) { // x TODO new
+        for (int l = 0; l < numberOfData; l++) {
+          wLy[idx_w(i, j, k, l)] = luhOld[idx(i, j, k, l)] - 0.5 * cellSize[1] * slope[idx_slope(i, j, k, 1, l)];
+          wRy[idx_w(i, j, k, l)] = luhOld[idx(i, j, k, l)] + 0.5 * cellSize[1] * slope[idx_slope(i, j, k, 1, l)];
+        }
+      }
+    }
+  }
+  // wz
+  for(int i = patchBegin-1; i < patchEnd+1; i++) { // z
+    for (int j = patchBegin-1; j < patchEnd+1; j++) { // y x TODO new
+      for (int k = patchBegin-1; k < patchEnd+1; k++) { // x TODO new
+        //    for (int j = patchBegin; j < patchEnd; j++) { // y TODO previous
+        //      for (int k = patchBegin; k < patchEnd; k++) { // x TODO previous
+        for (int l = 0; l < numberOfData; l++) {
+          wLz[idx_w(i, j, k, l)] = luhOld[idx(i, j, k, l)] - 0.5 * cellSize[2] * slope[idx_slope(i, j, k, 2, l)];
+          wRz[idx_w(i, j, k, l)] = luhOld[idx(i, j, k, l)] + 0.5 * cellSize[2] * slope[idx_slope(i, j, k, 2, l)];
+        }
+      }
+    }
+  }
+
+  // 4. Source evaluation, half time step evolution increment
+  double flx[numberOfVariables * DIMENSIONS] = {0.0};
+  double* F[3] = {flx, flx + numberOfVariables, flx + 2*numberOfVariables};
+
+  double slopet[variablesPerPatch] = {0.0};
+
+//  for(int i = patchBegin; i < patchEnd; i++) {
+//    for (int j = patchBegin; j < patchEnd; j++) {
+//      for (int k = patchBegin; k < patchEnd; k++) {
+    for(int i = patchBegin-1; i < patchEnd+1; i++) {
+      const double qi = (2.0*(i-patchBegin)+1.0)/(2.0*patchSize); //linspace;
+      for (int j = patchBegin-1; j < patchEnd+1; j++) {
+        const double qj = (2.0*(j-patchBegin)+1.0)/(2.0*patchSize); //linspace;
+        for (int k = patchBegin-1; k < patchEnd+1; k++) {
+        const double qk = (2.0*(k-patchBegin)+1.0)/(2.0*patchSize); //linspace;
+        if (
+            (j==patchBegin-1 && k==patchBegin-1) ||
+            (j==patchBegin-1 && k==patchEnd) ||
+            (j==patchEnd     && k==patchBegin-1) ||
+            (j==patchEnd     && k==patchEnd)
+            ||
+            (j==patchBegin-1 && i==patchBegin-1) ||
+            (j==patchBegin-1 && i==patchEnd) ||
+            (j==patchEnd     && i==patchBegin-1) ||
+            (j==patchEnd     && i==patchEnd)
+            ||
+            (i==patchBegin-1 && k==patchBegin-1) ||
+            (i==patchBegin-1 && k==patchEnd) ||
+            (i==patchEnd     && k==patchBegin-1) ||
+            (i==patchEnd     && k==patchEnd)
+        ) {
+          // skip all ghost cells where we do not have neighbour data
+        }
+        else {
+          double* Qt = slopet + idx(i, j, k, 0);
+          double* gradQ = slope + idx_slope(i, j, k, 0, 0);
+          // fused Source
+          if(useSource || useNCP) {
+            // Old code (for reference): solver.fusedSource(luh + idx(i, j, k, 0), gradQ, Qt);
+            if(useSource) {
+              x[2] = cellCenter[2] + dx[2] * (qi - 0.5);
+              x[1] = cellCenter[1] + dx[1] * (qj - 0.5);
+              x[0] = cellCenter[0] + dx[0] * (qk - 0.5);
+              solver.algebraicSource(x, t, luhOld + idx(i, j, k, 0), Qt);
+            } else {
+              std::fill_n(Qt, numberOfVariables, 0.0);
+            }
+            if(useNCP) {
+              double ncp[numberOfVariables];
+//              std::cout << i<<" ," << j<<" ," << k<<": " << std::endl;
+//              for (int l = 0; l < numberOfData; l++) {
+//                std::cout<< luh[idx(i, j, k, l)] << std::endl;
+//              }
+//              std::cout << std::endl; //TODO Remove
+              solver.nonConservativeProduct(luhOld + idx(i, j, k, 0), gradQ, ncp);
+              for(int l=0; l<numberOfVariables; l++) {
+                Qt[l] -= ncp[l];
+              }
+            }
+          }
+
+          if (useViscousFlux) {
+            // x fluxes
+            solver.viscousFlux(wLx + idx_w(i, j, k, 0), slope + idx_slope(i, j, k, 0, 0), F); // FLx
+            for (int l = 0; l < numberOfVariables; l++) {
+              Qt[l] += F[0][l] * invCellSize[0];
+            }
+            solver.viscousFlux(wRx + idx_w(i, j, k, 0), slope + idx_slope(i, j, k, 0, 0), F); // FRx
+            for (int l = 0; l < numberOfVariables; l++) {
+              Qt[l] -= F[0][l] * invCellSize[0];
+            }
+            // y fluxes
+            solver.viscousFlux(wLy + idx_w(i, j, k, 0), slope + idx_slope(i, j, k, 0, 0),  F); // FLy
+            for (int l = 0; l < numberOfVariables; l++) {
+              Qt[l] += F[1][l] * invCellSize[1];
+            }
+            solver.viscousFlux(wRy + idx_w(i, j, k, 0), slope + idx_slope(i, j, k, 0, 0),  F); // FRy
+            for (int l = 0; l < numberOfVariables; l++) {
+              Qt[l] -= F[1][l] * invCellSize[1];
+            }
+            // z fluxes
+            solver.viscousFlux(wLz + idx_w(i, j, k, 0), slope + idx_slope(i, j, k, 0, 0),  F); // FLz
+            for (int l = 0; l < numberOfVariables; l++) {
+              Qt[l] += F[2][l] * invCellSize[2];
+            }
+            solver.viscousFlux(wRz + idx_w(i, j, k, 0), slope + idx_slope(i, j, k, 0, 0),  F); // FRz
+            for (int l = 0; l < numberOfVariables; l++) {
+              Qt[l] -= F[2][l] * invCellSize[2];
+            }
+          } else if (useFlux) {
+            // x fluxes
+            solver.flux(wLx + idx_w(i, j, k, 0), F); // FLx
+            for (int l = 0; l < numberOfVariables; l++) {
+              Qt[l] += F[0][l] * invCellSize[0];
+            }
+            solver.flux(wRx + idx_w(i, j, k, 0), F); // FRx
+            for (int l = 0; l < numberOfVariables; l++) {
+              Qt[l] -= F[0][l] * invCellSize[0];
+            }
+            // y fluxes
+            solver.flux(wLy + idx_w(i, j, k, 0), F); // FLy
+            for (int l = 0; l < numberOfVariables; l++) {
+              Qt[l] += F[1][l] * invCellSize[1];
+            }
+            solver.flux(wRy + idx_w(i, j, k, 0), F); // FRy
+            for (int l = 0; l < numberOfVariables; l++) {
+              Qt[l] -= F[1][l] * invCellSize[1];
+            }
+            // z fluxes
+            solver.flux(wLz + idx_w(i, j, k, 0), F); // FLz
+            for (int l = 0; l < numberOfVariables; l++) {
+              Qt[l] += F[2][l] * invCellSize[2];
+            }
+            solver.flux(wRz + idx_w(i, j, k, 0), F); // FRz
+            for (int l = 0; l < numberOfVariables; l++) {
+              Qt[l] -= F[2][l] * invCellSize[2];
+            }
+          }
+
+          // evolve boundary states
+          for (int l = 0; l < numberOfVariables; l++) {
+            wLx[idx_w(i, j, k, l)] += 0.5 * dt * Qt[l];
+            wRx[idx_w(i, j, k, l)] += 0.5 * dt * Qt[l];
+            wLy[idx_w(i, j, k, l)] += 0.5 * dt * Qt[l];
+            wRy[idx_w(i, j, k, l)] += 0.5 * dt * Qt[l];
+            wLz[idx_w(i, j, k, l)] += 0.5 * dt * Qt[l];
+            wRz[idx_w(i, j, k, l)] += 0.5 * dt * Qt[l]; // debug: was 0.5
+          }
+        }
+      }
+    }
+  }
+
+  // 4. Solve Riemann problems
+  double fL[numberOfVariables], fR[numberOfVariables];
+  double dt_max_allowed = std::numeric_limits<double>::max();
+
+  // x edges
+  for(int i = patchBegin; i < patchEnd; i++) {
+    for (int j = patchBegin; j < patchEnd; j++) {
+      for (int k = patchBegin-1; k < patchEnd; k++) {
+        double s_max_x =
+            solver.riemannSolver(
+                fL, fR,
+                wRx + idx_w(i, j, k, 0),
+                wLx + idx_w(i, j, k+1, 0),
+                slope + idx_slope(i,j,k,0,0),
+                slope + idx_slope(i,j,k+1,0,0),
+                cellSize,
+                0
+            );
+        dt_max_allowed = std::min(
+            dt_max_allowed, cflFactor / DIMENSIONS * cellSize[0] / s_max_x);
+
+        for (int l=0; l<numberOfVariables; ++l) {
+          luh[idx(i, j, k, l)]   -= invCellSizeTimesDt[0] * fL[l];  
+          luh[idx(i, j, k+1, l)] += invCellSizeTimesDt[0] * fR[l];
+        }
+      }
+    }
+  }
+
+  // y edges
+  for(int i = patchBegin; i < patchEnd; i++) {
+    for (int j = patchBegin-1; j < patchEnd; j++) {
+      for (int k = patchBegin; k < patchEnd; k++) {
+        double s_max_y = solver.riemannSolver(
+            fL, fR,
+            wRy + idx_w(i, j, k, 0),
+            wLy + idx_w(i, j+1, k, 0),
+            slope + idx_slope(i,j,k,0,0),
+            slope + idx_slope(i,j+1,k,0,0),
+            cellSize,
+            1
+        );
+        dt_max_allowed = std::min(
+            dt_max_allowed, cflFactor / DIMENSIONS * cellSize[1] / s_max_y);
+
+        for (int l=0; l<numberOfVariables; ++l) {
+          luh[idx(i, j, k, l)]   -= invCellSizeTimesDt[1] * fL[l];  
+          luh[idx(i, j+1, k, l)] += invCellSizeTimesDt[1] * fR[l];
+        }
+      }
+    }
+  }
+
+  // z edges
+  for(int i = patchBegin-1; i < patchEnd; i++) {
+    for (int j = patchBegin; j < patchEnd; j++) {
+      for (int k = patchBegin; k < patchEnd; k++) {
+        double s_max_y = solver.riemannSolver(
+            fL, fR,
+            wRz + idx_w(i, j, k, 0),
+            wLz + idx_w(i+1, j, k, 0),
+            slope + idx_slope(i,j,k,0,0),
+            slope + idx_slope(i+1,j,k,0,0),
+            cellSize,
+            2
+        );
+        dt_max_allowed = std::min(
+            dt_max_allowed, cflFactor / DIMENSIONS * cellSize[2] / s_max_y);
+
+        for (int l=0; l<numberOfVariables; ++l) {
+          luh[idx(i, j, k, l)]   -= invCellSizeTimesDt[2] * fL[l];  
+          luh[idx(i+1, j, k, l)] += invCellSizeTimesDt[2] * fR[l];
+        }
+      }
+    }
+  }
+
+  // TODO(guera): Early exit if dt > dt_max_allowed?!
+
+  // 5. Evolve, evaluate source, update cells
+  if(useSource || useNCP) {
+    double ws [numberOfData]      = {0.0};
+    double src[numberOfVariables] = {0.0};
+
+    for (int i= patchBegin; i < patchEnd; i++) {
+      const double qi = (2.0*(i-patchBegin)+1.0)/(2.0*patchSize);
+      for (int j = patchBegin; j < patchEnd; j++) {
+        const double qj = (2.0*(j-patchBegin)+1.0)/(2.0*patchSize);
+        for (int k = patchBegin; k < patchEnd; k++) {
+          const double qk = (2.0*(k-patchBegin)+1.0)/(2.0*patchSize);
+          std::copy_n(luhOld + idx(i,j,k,0),numberOfData,ws); // copy the material parameters over
+          for (int l = 0; l < numberOfVariables; l++) {
+            ws[l] += 0.5 * dt * slopet[idx_w(i,j,k,l)]; // idx_w ~ idx_slopet
+          }
+
+          double* gradQ = slope + idx_slope(i, j, k, 0, 0); // const in time
+          // Old code (for reference): solver.fusedSource(ws, gradQ, src);
+          if(useSource) {
+            x[2] = cellCenter[2] + dx[2] * (qi - 0.5);
+            x[1] = cellCenter[1] + dx[1] * (qj - 0.5);
+            x[0] = cellCenter[0] + dx[0] * (qk - 0.5);
+            solver.algebraicSource(x, t + 0.5 * dt, ws, src);
+          } else {
+            std::fill_n(src, numberOfVariables, 0.0);
+          }
+          if(useNCP) {
+            double ncp[numberOfVariables];
+            solver.nonConservativeProduct(ws, gradQ, ncp);
+            for(int l=0; l<numberOfVariables; l++) {
+              src[l] -= ncp[l];
+            }
+          }
+
+          for(int l = 0; l < numberOfVariables; l++) {
+            luh[idx(i, j, k, l)] += dt * src[l];
+          }
+        }
+      }
+    }
+  }
+
+  return dt_max_allowed;
+}
+
+#endif  // DIMENSIONS == 3

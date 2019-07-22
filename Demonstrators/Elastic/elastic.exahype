@@ -1,0 +1,104 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon 
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/
+ 
+/**
+
+ Elastic Wave
+
+ A simple project. (well, it was simple, in the beginning).
+
+ */
+exahype-project  Elastic
+
+  peano-kernel-path const = ./Peano
+  exahype-path const      = ./ExaHyPE
+  output-directory const  = ./Demonstrators/Elastic
+  architecture const      = noarch
+  log-file                = mylogfile.log
+
+  computational-domain
+    dimension const          = 3
+    width                    = 1.0, 1.0, 1.0
+    offset                   = 0.0, 0.0, 0.0
+    time-steps               = 400
+  end computational-domain
+
+  global-optimisation
+    fuse-algorithmic-steps          = all
+    fuse-algorithmic-steps-rerun-factor   = 0.99
+    fuse-algorithmic-steps-diffusion-factor   = 0.99
+    spawn-predictor-as-background-thread = off
+    spawn-amr-background-threads         = off
+    /* 0.0 und 0.8 sind schon mal zwei Faktoren */
+    disable-vertex-exchange-in-time-steps = on
+    time-step-batch-factor           = 0.0
+    disable-metadata-exchange-in-batched-time-steps = off
+    double-compression = 0.0
+    spawn-double-compression-as-background-thread = off
+  end global-optimisation
+
+  solver ADER-DG MyElasticWaveSolver
+    variables const    = v:3,sigma:6
+    parameters const  = rho:1,cp:1,cs:1
+    order const        = 6
+    /* 27 points: 0.05, 9 points: 0.15 */
+    maximum-mesh-size  = 0.15
+    maximum-mesh-depth = 0
+    time-stepping      = global
+    type const         = linear, Legendre
+    terms const        = flux,ncp,materialparameters
+    optimisation const = generic,patchwiseadjust
+    language const     = C
+
+    plot vtk::Legendre::vertices::ascii ConservedQuantitiesWriter
+      variables const = 12
+      time            = 0.0
+      repeat          = 0.01
+      output          = ./conserved
+    end plot
+
+    /* this is the fake plotter used to compute global integrals */
+    /* it has no output fields. */
+    /*
+    plot vtk::Cartesian::vertices::ascii ComputeGlobalIntegrals
+      variables const = 0
+      time            = 0.0
+      repeat          = 0.05
+      output          = ./output/these-files-should-not-be-there
+    end plot
+
+    plot vtk::Cartesian::vertices::ascii PrimitivesWriter
+      variables const = 3
+      time            = 0.0
+      repeat          = 0.05
+      output          = ./primitive
+    end plot
+
+    plot vtk::Cartesian::vertices::ascii ExactPrimitivesWriter
+      variables const = 3
+      time            = 0.0
+      repeat          = 0.05
+      output          = ./exact-primitive
+    end plot */
+
+    /* Do not need the time series for a point in the moment*/
+   /* plot probe::ascii ProbeWriter
+      variables const = 9
+      time            = 0.0
+      repeat          = 0.005
+      output          = ./reference_solution
+      select          = x:0.5,y:0.5,z:0.8
+    end plot */
+    
+  end solver
+end exahype-project

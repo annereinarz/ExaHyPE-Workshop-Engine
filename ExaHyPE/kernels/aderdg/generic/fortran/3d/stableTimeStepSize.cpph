@@ -1,0 +1,75 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon 
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/
+#include "../../../../KernelUtils.h"
+
+#define EXAHYPE_CFL_FACTOR 0.9 // TODO(Dominic): Externalise
+
+extern "C" {
+void pdeeigenvalues_(double* lambda, const double* const Q, double* nv);
+}
+
+template <typename SolverType>
+double kernels::aderdg::generic::fortran::stableTimeStepSize(SolverType& solver, const double* const luh,
+    const tarch::la::Vector<DIMENSIONS, double>& dx) {
+  const int numberOfVariables  = solver.getNumberOfVariables();
+  const int numberOfParameters = solver.getNumberOfParameters();
+  const int basisSize = solver.getNodesPerCoordinateAxis();
+  
+  idx4 idx_luh(basisSize, basisSize, basisSize, numberOfVariables+numberOfParameters);
+  
+  const double PNPM[10] = {1.0,   0.33,  0.17, 0.1,  0.069,
+                             0.045, 0.038, 0.03, 0.02, 0.015};
+
+  double nv[3];
+  nv[0] = 0.;
+  nv[1] = 0.;
+  nv[2] = 0.;
+
+  double dt = std::numeric_limits<double>::max();
+  double lambda[numberOfVariables] = {0.0};
+  for (int i = 0; i < basisSize; i++) {
+    for (int j = 0; j < basisSize; j++) {
+      for (int k = 0; k < basisSize; k++) {
+        // !!
+        // TODO(Dominic): For refactoring purposes. Remove old indexing method.
+        const int nodeIndex = i + basisSize * j + basisSize * basisSize * k;
+        const int dofStartIndex = nodeIndex * numberOfVariables;
+        assertion(dofStartIndex==idx_luh(k,j,i,0));
+        // !!
+
+        double denominator = 0.0;
+        for (int d = 0; d < DIMENSIONS; d++) {
+          nv[0] = 0.;
+          nv[1] = 0.;
+          nv[2] = 0.;
+          nv[d] = 1.;
+          pdeeigenvalues_(lambda, &luh[idx_luh(i,j,k,0)], nv);
+
+          double maxEigenvalue = 0.0;
+          for (int ivar = 0; ivar < numberOfVariables; ivar++) {
+            maxEigenvalue = std::max(fabs(lambda[ivar]), maxEigenvalue);
+          }
+          denominator += maxEigenvalue / dx[d];
+        }
+
+        dt = std::min(dt, EXAHYPE_CFL_FACTOR * PNPM[basisSize - 1] /
+                              denominator);  // order N = basisSize-1
+      }
+    }
+  }
+
+  // std::cout << "-----------------------------------" << std::endl;
+  // std::cout << dt << std::endl;
+  // std::cout << "-----------------------------------" << std::endl;
+  return dt;
+}

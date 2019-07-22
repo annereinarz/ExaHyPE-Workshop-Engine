@@ -1,0 +1,82 @@
+{# /**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/ #}
+
+#include "{{pathToOptKernel}}/Kernels.h"
+#include "{{pathToOptKernel}}/DGMatrices.h"
+#include "{{pathToOptKernel}}/Quadrature.h"
+
+
+void {{codeNamespace}}::faceIntegral(
+                              double *lduh, 
+                              const double *const lFhbnd,
+                              const int direction, 
+                              const int orientation,
+                              const double inverseDxDirection
+) {
+
+  const double* const FCoeff = (orientation == 0 ? FLCoeff : FRCoeff);
+  
+#ifdef __INTEL_COMPILER
+  __assume_aligned(FRCoeff,  ALIGNMENT);
+  __assume_aligned(FLCoeff,  ALIGNMENT);
+  __assume_aligned(FCoeff,   ALIGNMENT);
+  __assume_aligned(weights2, ALIGNMENT);
+  __assume_aligned(lFhbnd,   ALIGNMENT);
+  __assume_aligned(lduh,     ALIGNMENT);
+#endif
+  
+{% if isLinear %}
+  const double scaling = inverseDxDirection;
+{% else %}
+  const double scaling = (2.0 * orientation - 1.0) * inverseDxDirection;
+{% endif %}
+  
+  switch (direction) {
+    case 0:   // x faces, left-right flux
+      for (int zy = 0; zy < {{nDof*nDof3D}}; zy++) { // zy
+        const double scaledWeight = scaling * weights2[zy];
+        for (int x = 0; x < {{nDof}}; x++) { // x
+          #pragma omp simd aligned(lduh,FCoeff,lFhbnd:ALIGNMENT)
+          for (int n = 0; n < {{nVarPad}}; n++) {
+            lduh[(zy*{{nDof}}+x)*{{nVarPad}}+n] -= scaledWeight * FCoeff[x] * lFhbnd[zy*{{nVarPad}}+n];
+          }
+        }
+      }
+      break;
+    case 1: // y faces
+      for (int z = 0; z < {{nDof3D}}; z++) { // z
+      for (int x = 0; x < {{nDof}}; x++) { // x
+        const double scaledWeight = scaling * weights2[z*{{nDof}}+x];
+        for (int y = 0; y < {{nDof}}; y++) { // y
+          #pragma omp simd aligned(lduh,FCoeff,lFhbnd:ALIGNMENT)
+          for (int n = 0; n < {{nVarPad}}; n++) {
+            lduh[((z*{{nDof}}+y)*{{nDof}}+x)*{{nVarPad}}+n] -= scaledWeight * FCoeff[y] * lFhbnd[(z*{{nDof}}+x)*{{nVarPad}}+n];
+          }
+        }
+      }
+      }
+      break;
+    case 2: // z faces
+    
+      for (int yx = 0; yx < {{nDof*nDof}}; yx++) { // yx
+        const double scaledWeight = scaling * weights2[yx];
+        for (int z = 0; z < {{nDof}}; z++) { // x
+          #pragma omp simd aligned(lduh,FCoeff,lFhbnd:ALIGNMENT)
+          for (int n = 0; n < {{nVarPad}}; n++) {
+            lduh[(z*{{nDof*nDof}}+yx)*{{nVarPad}}+n] -= scaledWeight * FCoeff[z] * lFhbnd[yx*{{nVarPad}}+n];
+          }
+        }
+      }
+      break;
+  }
+}

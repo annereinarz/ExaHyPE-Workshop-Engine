@@ -1,0 +1,221 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+#if DIMENSIONS==2
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+/**
+ * A simple Rusanov flux considering pointwise
+ * left and right values.
+ */
+template <bool useNCP, bool useFlux, bool useViscousFlux, typename SolverType>
+double kernels::finitevolumes::riemannsolvers::c::rusanov(
+    SolverType& solver,
+    double* fnL, double *fnR, const double* qL, const double* qR,
+    const double* gradQL,
+    const double* gradQR,
+    const double* const cellSize,
+    int normalNonZero) {
+  constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int numberOfData       = numberOfVariables + numberOfParameters;
+
+  // Compute penalty contribution of convective eigenvalues.
+  double sL[numberOfVariables];
+  double sR[numberOfVariables];
+
+  solver.eigenvalues(qL, normalNonZero, sL);
+  solver.eigenvalues(qR, normalNonZero, sR);
+
+  double maxEigenvalue = -1.0;
+  for (int i = 0; i < numberOfVariables; i++) {
+    maxEigenvalue = std::max( std::abs(sL[i]), maxEigenvalue);
+  }
+  for (int i = 0; i < numberOfVariables; i++) {
+    maxEigenvalue = std::max(std::abs(sR[i]), maxEigenvalue);
+  }
+
+  double s_max = maxEigenvalue;
+  double s_max_dt = maxEigenvalue;
+
+  double maxViscousEigenvalue = 0.0;
+  if (useViscousFlux) {
+    // Compute penalty contribution of diffusive eigenvalues
+    std::fill_n(sL, numberOfVariables, 0.0);
+    std::fill_n(sR, numberOfVariables, 0.0);
+
+    solver.viscousEigenvalues(qL, normalNonZero, sL);
+    solver.viscousEigenvalues(qR, normalNonZero, sR);
+
+    for (int i = 0; i < numberOfVariables; i++) {
+      maxViscousEigenvalue = std::max(maxViscousEigenvalue, std::abs(sL[i]));
+    }
+    for (int i = 0; i < numberOfVariables; i++) {
+      maxViscousEigenvalue = std::max(maxViscousEigenvalue, std::abs(sR[i]));
+    }
+
+    const auto pi = std::acos(-1); // not constexpr for intel compilers
+    const auto factor = std::sqrt(0.5 * pi);
+
+    s_max += 2 * factor * maxViscousEigenvalue / (cellSize[normalNonZero] * factor);
+    s_max_dt += 2 * maxViscousEigenvalue / (cellSize[normalNonZero]);
+  }
+
+  // determine BgradQ from ncp
+  double ncp[numberOfData] = {0.0};
+  double gradQ[DIMENSIONS][numberOfData] = {0.0};
+  if (useNCP || useViscousFlux) {
+    double Qavg[numberOfData];
+    for(int k=0; k < numberOfData; k++) {
+       Qavg[k] = (qR[k] + qL[k]) / 2;
+       gradQ[normalNonZero][k] = qR[k] - qL[k];
+    }
+    solver.nonConservativeProduct(Qavg, gradQ[0], ncp);
+  }
+
+  double FL2[DIMENSIONS][numberOfVariables] = {0.0}; // Q: Can we skip this memset?
+  double FR2[DIMENSIONS][numberOfVariables] = {0.0};
+  double* FL[DIMENSIONS]={FL2[0], FL2[1]};
+  double* FR[DIMENSIONS]={FR2[0], FR2[1]};
+  if (useViscousFlux) {
+    solver.viscousFlux(qL,gradQL, FL);
+    solver.viscousFlux(qR,gradQR, FR);
+  } else if (useFlux) {
+    solver.flux(qL, FL);
+    solver.flux(qR, FR);
+  }
+
+  for (int i = 0; i < numberOfVariables; i++) {
+    fnL[i] = 0.5 * s_max * (qL[i] - qR[i]);
+    if (useFlux || useViscousFlux) {
+      fnL[i] += 0.5 * (FL2[normalNonZero][i] + FR2[normalNonZero][i]);
+    }
+
+    if(useNCP) {
+      fnR[i] = fnL[i] - 0.5 * ncp[i];
+      fnL[i] = fnL[i] + 0.5 * ncp[i];
+    } else {
+      fnR[i] = fnL[i];
+    }
+  }
+  return s_max_dt;
+}
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+#elif DIMENSIONS == 3
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+/**
+ * A simple Rusanov flux considering pointwise
+ * left and right values.
+ */
+//template <void PDEEigenvalues(const double* const Q, const int normalNonZero,
+//                              double* lambda),
+//          void PDEFlux(const double* const Q, double** F)>
+template <bool useNCP, bool useFlux,bool useViscousFlux, typename SolverType>
+double kernels::finitevolumes::riemannsolvers::c::rusanov(
+        SolverType& solver, double* fnL, double *fnR, const double* qL, const double* qR,
+        const double* gradQL, const double* gradQR,
+        const double* const cellSize,
+        int normalNonZero) {
+  constexpr int numberOfVariables  = SolverType::NumberOfVariables;
+  constexpr int numberOfParameters = SolverType::NumberOfParameters;
+  constexpr int numberOfData       = numberOfVariables+numberOfParameters;
+  
+  double sL[numberOfVariables] = {0.0};
+  double sR[numberOfVariables] = {0.0};
+  solver.eigenvalues(qL, normalNonZero, sL);
+  solver.eigenvalues(qR, normalNonZero, sR);
+
+  double maxEigenvalue = -1.0;
+  for (int i = 0; i < numberOfVariables; i++) {
+    maxEigenvalue = std::max(maxEigenvalue, std::abs(sL[i]));
+  }
+  for (int i = 0; i < numberOfVariables; i++) {
+    maxEigenvalue = std::max(maxEigenvalue, std::abs(sR[i]));
+  }
+
+  double s_max = maxEigenvalue;
+  double s_max_dt = maxEigenvalue;
+
+  if (useViscousFlux) {
+    double maxViscousEigenvalue = 0.0;
+
+    // Compute penalty contribution of diffusive eigenvalues
+    std::fill_n(sL, numberOfVariables, 0.0);
+    std::fill_n(sR, numberOfVariables, 0.0);
+
+    solver.viscousEigenvalues(qL, normalNonZero, sL);
+    solver.viscousEigenvalues(qR, normalNonZero, sR);
+
+    for (int i = 0; i < numberOfVariables; i++) {
+      maxViscousEigenvalue = std::max(maxViscousEigenvalue, std::abs(sL[i]));
+    }
+    for (int i = 0; i < numberOfVariables; i++) {
+      maxViscousEigenvalue = std::max(maxViscousEigenvalue, std::abs(sR[i]));
+    }
+
+    const auto pi = std::acos(-1); // not constexpr for intel compilers
+    const auto factor = std::sqrt(0.5 * pi);
+
+    s_max += 2 * factor * maxViscousEigenvalue / (cellSize[normalNonZero] * factor);
+    s_max_dt += 2 * maxViscousEigenvalue / (cellSize[normalNonZero]);
+  }
+
+
+  // determine BgradQ from ncp
+  double ncp[numberOfData] = {0.0};
+  double gradQ[DIMENSIONS][numberOfData] = {0.0};
+  if (useNCP || useViscousFlux) {
+    double Qavg[numberOfData];
+    for(int k=0; k < numberOfData; k++) {
+       Qavg[k] = (qR[k] + qL[k]) / 2;
+       gradQ[normalNonZero][k] = qR[k] - qL[k];
+    }
+    solver.nonConservativeProduct(Qavg, gradQ[0], ncp);
+  }
+
+  double FL3[DIMENSIONS][numberOfVariables] = {0.0};
+  double FR3[DIMENSIONS][numberOfVariables] = {0.0};
+  double* FL[DIMENSIONS]={FL3[0], FL3[1], FL3[2]};
+  double* FR[DIMENSIONS]={FR3[0], FR3[1], FR3[2]};
+  if (useViscousFlux) {
+    solver.viscousFlux(qL,gradQL, FL);
+    solver.viscousFlux(qR,gradQR, FR);
+  } else if (useFlux) {
+    solver.flux(qL, FL);
+    solver.flux(qR, FR);
+  }
+
+  for (int i = 0; i < numberOfVariables; i++) {
+    fnL[i] = 0.5 * s_max * (qL[i] - qR[i]);
+    if(useFlux) {
+      fnL[i] += 0.5 * (FL3[normalNonZero][i] + FR3[normalNonZero][i]);
+    }
+
+    if(useNCP) {
+      fnR[i] = fnL[i] - 0.5 * ncp[i];
+      fnL[i] = fnL[i] + 0.5 * ncp[i];
+    } else {
+      fnR[i] = fnL[i];
+    }
+  }
+
+  return s_max_dt;  // TODO(guera): Use to check if dt was okay in surfaceIntegral
+}
+#endif

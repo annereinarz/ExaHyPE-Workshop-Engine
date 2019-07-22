@@ -1,0 +1,89 @@
+{# /**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/ #}
+
+#include <mm_malloc.h> //g++
+
+#include "{{pathToOptKernel}}/Quadrature.h"
+
+// Use {{quadratureType}} quadrature
+double* {{codeNamespace}}::weights1;
+double* {{codeNamespace}}::weights2;
+double* {{codeNamespace}}::weights3;
+double* {{codeNamespace}}::iweights3;
+double* {{codeNamespace}}::nodes;
+{% if useLimiter %}
+double* {{codeNamespace}}::uh2lob;
+double* {{codeNamespace}}::dg2fv;
+double* {{codeNamespace}}::fv2dg;
+{% endif %}
+
+void {{codeNamespace}}::freeQuadratureNodesAndWeights() {
+  _mm_free(weights1);
+  _mm_free(weights2);
+  _mm_free(weights3);
+  _mm_free(iweights3);
+  _mm_free(nodes);
+{% if useLimiter %}
+  _mm_free(uh2lob);
+  _mm_free(dg2fv);
+  _mm_free(fv2dg);
+{% endif %}
+}
+
+void {{codeNamespace}}::initQuadratureNodesAndWeights() {
+  weights1  = (double *) _mm_malloc(sizeof(double)*{{w1Size }}, ALIGNMENT); //nDofPad
+  weights2  = (double *) _mm_malloc(sizeof(double)*{{w2Size }}, ALIGNMENT); //2D: nDofPad (==weight1), 3D: (nDof*nDof)Pad (== w1[i]*w1[j])
+  weights3  = (double *) _mm_malloc(sizeof(double)*{{w3Size }}, ALIGNMENT); //2D: (nDof*nDof)Pad (== w1[i]*w1[j]), 3D: (nDof*nDof*nDof)Pad (== w1[i]*w1[j]*w1[k])
+  iweights3 = (double *) _mm_malloc(sizeof(double)*{{w3Size }}, ALIGNMENT); //2D: (nDof*nDof)Pad (== w1[i]*w1[j]), 3D: (nDof*nDof*nDof)Pad (== w1[i]*w1[j]*w1[k])
+  nodes     = (double *) _mm_malloc(sizeof(double)*{{nDofPad}}, ALIGNMENT);
+{% if useLimiter %}
+  uh2lob    = (double *) _mm_malloc(sizeof(double)*{{uh2lobSize}}, ALIGNMENT); //nDof*nDofPad
+  dg2fv     = (double *) _mm_malloc(sizeof(double)*{{dg2fvSize }}, ALIGNMENT); //nDof*nDofLimPad
+  fv2dg     = (double *) _mm_malloc(sizeof(double)*{{fv2dgSize }}, ALIGNMENT); //nDofLim*nDofPad
+{% endif %}
+  
+{% for i in w1_seq %}
+  weights1[{{i}}]  = {{"{:.15e}".format(weights1[i])}};
+{% endfor %}
+
+{% for i in w2_seq %}
+  weights2[{{i}}]  = {{"{:.15e}".format(weights2[i])}};
+{% endfor %}
+
+{% for i in w3_seq %}
+  weights3[{{i}}]  = {{"{:.15e}".format(weights3[i])}};
+{% endfor %}
+
+{% for i in w3_seq %}
+  iweights3[{{i}}] = {{"{:.15e}".format(iweights3[i])}};
+{% endfor %}
+
+{% for i in quadrature_seq %}
+  nodes[{{i}}]     = {{"{:.15e}".format(QuadratureNodes[i])}};
+{% endfor %}
+
+{% if useLimiter %}
+{% for i in uh2lob_seq %}
+  uh2lob[{{i}}]    = {{"{:.15e}".format(uh2lob[i])}};
+{% endfor %}
+
+{% for i in dg2fv_seq %}
+  dg2fv[{{i}}]    = {{"{:.15e}".format(dg2fv[i])}};
+{% endfor %}
+
+{% for i in fv2dg_seq %}
+  fv2dg[{{i}}]    = {{"{:.15e}".format(fv2dg[i])}};
+{% endfor %}
+{% endif %}
+
+}

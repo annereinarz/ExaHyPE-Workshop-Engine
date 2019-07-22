@@ -1,0 +1,67 @@
+/**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/
+
+#include "../../Kernels.h"
+
+#include "../../../../KernelUtils.h"
+#include <cstring>
+
+#if DIMENSIONS == 3
+
+template <bool useSource, bool useFlux, int numberOfVariables, int basisSize>
+void kernels::aderdg::generic::c::volumeIntegralLinear(double* lduh, const double* const lFhi,
+    const tarch::la::Vector<DIMENSIONS, double>& dx) {
+  // for linear non-conservative PDE, the volume integral is trivial, since it
+  // only involves the element mass matrix, which later will cancel
+
+  idx5 idx_lFhi(DIMENSIONS+1, basisSize, basisSize, basisSize, numberOfVariables);
+  idx4 idx_lduh(basisSize, basisSize, basisSize, numberOfVariables);
+
+  constexpr int order      = basisSize - 1;
+  constexpr int basisSize2 = basisSize * basisSize;
+  constexpr int basisSize3 = basisSize2 * basisSize;
+
+  std::fill_n(lduh, basisSize3 * numberOfVariables, 0.0);
+
+  for (int i = 0; i < basisSize; i++) {
+    for (int j = 0; j < basisSize; j++) {
+      for (int k = 0; k < basisSize; k++) {
+      #if defined(_GLL)
+      double weight = kernels::gaussLobattoWeights[order][i] *
+            kernels::gaussLobattoWeights[order][j] *
+            kernels::gaussLobattoWeights[order][k];
+      #else 
+        double weight = kernels::gaussLegendreWeights[order][i] *
+            kernels::gaussLegendreWeights[order][j] *
+            kernels::gaussLegendreWeights[order][k];
+     #endif	    
+
+        // Fortran: lduh(:,k,j,i) = -SUM(lFhi(:,k,j,i,1:nDim), dim = 5) * weight
+        for (int l = 0; l < numberOfVariables; l++) {
+          //	  double sum = 0.0;
+          for (int m = 0; m < DIMENSIONS; m++) {
+            //sum = sum  +   lFhi[idx_lFhi(m, i, j, k, l)];
+            lduh[idx_lduh(i, j, k, l)] -= weight * lFhi[idx_lFhi(m, i, j, k, l)];
+          }
+	  if(useSource){
+	    int m=3;
+	    lduh[idx_lduh(i, j, k, l)] -= weight * lFhi[idx_lFhi(m, i, j, k, l)];
+	  }
+          //lduh[idx_lduh(i, j, k, l)] = -weight *sum;
+        }
+      }
+    }
+  }
+}
+
+#endif  // DIMENSIONS == 3

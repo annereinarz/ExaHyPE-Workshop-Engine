@@ -1,0 +1,97 @@
+{#
+      C       = alpha  *   A   *    B   + beta  *  C
+   (M x N)              (M x K)  (K x N)
+  The gemm config (fetched through matmulKey) contains M, N, K, LDA, LDB, LDC, alpha and beta
+  See matmulConfig
+
+  String matmulKey : name of the associated config
+  String A         : name of A
+  String B         : name of B
+  String C         : name of C
+  String A_shift   : shift to the zero of A
+  String B_shift   : shift to the zero of B
+  String C_shift   : shift to the zero of C
+  
+  optional
+  bool overrideUseLibxsmm : force locally useLibxsmm to take this value if set
+  String trueB            : true array B, B must b a true matrix, not a tensor slice
+  String trueAlpha        : true value of the coefficent alpha (note: it will be multiplicated by the configuration alpha, /!\ sign error)
+  bool forceCoeffMatrix   : only when using trueB, trueAlpha, force the no libxsmm case to also generate the coeff matrix
+  
+  If trueB is used, a temporary array trueAlpha*trueB is generated
+#}
+{% with %}
+{# /**************************************
+   **** Set up helper template values ****
+   **************************************/ #}
+{% set conf = matmulConfigs[matmulKey] %}
+{% if overrideUseLibxsmm is not defined or overrideUseLibxsmm == "BoolNotDefined" %}
+  {% set overrideUseLibxsmm = useLibxsmm %}{# if no override then take the current value #}
+{% endif %}
+{% if trueB is not defined or trueB == "" %}
+  {% set trueB = B %}
+  {% set useTrueB = False %}
+{% else %}
+  {% set useTrueB = True %}
+{% endif %}
+{% if forceCoeffMatrix is not defined %}
+  {% set forceCoeffMatrix = False %}
+{% endif %}
+{# /********************
+   **** Subtemplate ****
+   *********************/ #}
+{# 
+
+// LIBXSMM case
+//-------------
+
+#}
+{% if overrideUseLibxsmm %}
+{% if useTrueB %}{# will set B[it] to be trueAlpha*trueB[it] #}
+double {{B}}[{{conf.LDB*conf.K}}] __attribute__((aligned(ALIGNMENT)));
+#pragma omp simd aligned({{B}},{{trueB}}:ALIGNMENT)
+for (int it = 0; it < {{conf.LDB*conf.K}}; it++) {
+  {{B}}[it] = {{trueAlpha}} * {{trueB}}[it];
+}
+#if defined(USE_IPO) && !defined(UNSAFE_IPO)
+volatile double doNotOptimizeAway_{{B}} = {{B}}[0]; //used to prevent the compiler from optimizing temp array away. Needs to be volatile
+#endif
+{% endif %}{# useTrueB #}
+#ifdef USE_IPO
+#pragma forceinline
+#endif
+{{conf.baseroutinename}}({{A}}{% if A_shift != '0' %}+{{A_shift}}{% endif %}, {{B}}{% if B_shift != '0' %}+{{B_shift}}{% endif %}, {{C}}{% if C_shift != '0' %}+{{C_shift}}{% endif %});
+{% else %}{# overrideUseLibxsmm #}
+{# 
+
+// No LIBXSMM case
+//----------------
+
+#}
+{% if forceCoeffMatrix %}
+double {{B}}[{{conf.LDB*conf.K}}] __attribute__((aligned(ALIGNMENT)));
+#pragma omp simd aligned({{B}},{{trueB}}:ALIGNMENT)
+for (int it = 0; it < {{conf.LDB*conf.K}}; it++) {
+  {{B}}[it] = {{trueAlpha}} * {{trueB}}[it];
+}
+{% set trueB = B %}
+{% endif %}
+{% if conf.beta == 0 %}
+// reset {{C}}
+for (int it_1 = 0; it_1 < {{conf.N}}; it_1++) {
+  #pragma omp simd aligned({{C}}:ALIGNMENT)
+  for (int it_3 = 0; it_3 < {{conf.M}}; it_3++) {
+    {{C}}[{{C_shift}}+it_1*{{conf.LDC}}+it_3] = 0.;
+  }
+}
+{% endif %}
+for (int it_1 = 0; it_1 < {{conf.N}}; it_1++) {
+  for (int it_2 = 0; it_2 < {{conf.K}}; it_2++) {
+    #pragma omp simd aligned({{C}},{{A}},{{trueB}}:ALIGNMENT)
+    for (int it_3 = 0; it_3 < {{conf.M}}; it_3++) {
+      {{C}}[{{C_shift}}+it_1*{{conf.LDC}}+it_3] {{ '+' if conf.alpha == 1 else '-' }}= {{A}}[{{A_shift}}+it_2*{{conf.LDA}}+it_3] * {% if (useTrueB and not forceCoeffMatrix) %}{{trueAlpha}}* {% endif %}{{trueB}}[{% if B_shift != '0' %}{{B_shift}}+{% endif %}it_1*{{conf.LDB}}+it_2];
+    }
+  }
+}
+{% endif %}
+{% endwith %}

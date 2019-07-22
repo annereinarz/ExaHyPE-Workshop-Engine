@@ -1,0 +1,40 @@
+{# /**
+ * This file is part of the ExaHyPE project.
+ * Copyright (c) 2016  http://exahype.eu
+ * All rights reserved.
+ *
+ * The project has received funding from the European Union's Horizon
+ * 2020 research and innovation programme under grant agreement
+ * No 671698. For copyrights and licensing, please consult the webpage.
+ *
+ * Released under the BSD 3 Open Source License.
+ * For the full license text, see LICENSE.txt
+ **/ #}
+
+// update the elements 
+
+#include "{{pathToOptKernel}}/Kernels.h"
+#include "{{pathToOptKernel}}/Quadrature.h"
+
+void {{codeNamespace}}::solutionUpdate( 
+  double* restrict luh,
+  const double* restrict const luhOld,
+  const double* restrict const lduh, 
+  const double dt
+) {
+#ifdef __INTEL_COMPILER
+  __assume_aligned(iweights3, ALIGNMENT);
+  __assume_aligned(luh,       ALIGNMENT); //luh    should be aligned, see Solver.h
+  __assume_aligned(luhOld,    ALIGNMENT); //luhOld should be aligned, see Solver.h
+  __assume_aligned(lduh,      ALIGNMENT); //lduh   should be aligned, see Solver.h
+#endif
+
+  for (int xyz = 0; xyz < {{nDof**nDim}}; xyz++) {
+    const double coeff = dt*iweights3[xyz];
+    #pragma omp simd aligned(luh,luhOld,lduh:ALIGNMENT)
+    for (int n = 0; n < {{nVar}}; n++) { //update only the variables, lduh contains no parameters
+      luh[xyz*{{nData}}+n] = luhOld[xyz*{{nData}}+n] + coeff*lduh[xyz*{{nVarPad}}+n]; //simd+fma
+    }
+  }
+ 
+}

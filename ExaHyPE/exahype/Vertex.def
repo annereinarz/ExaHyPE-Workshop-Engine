@@ -1,0 +1,13 @@
+#include "peano/utils/Globals.h"
+
+Packed-Type: int;
+
+Constant: TWO_POWER_D;
+
+class exahype::dastgen::Vertex {
+  persistent int CellDescriptionsIndex[TWO_POWER_D];
+  
+  // Per patch type, we need a pointer to the cell descriptions of adjacent cells
+  persistent pointer ADERDGCellDescriptions       [TWO_POWER_D];
+  persistent pointer FiniteVolumesCellDescriptions[TWO_POWER_D];
+};

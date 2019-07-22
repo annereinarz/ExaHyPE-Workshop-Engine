@@ -1,0 +1,42 @@
+\section{Peano's default VTK dumps}
+
+Peano's default VTK plotters project Peano's tree-based grid onto an
+unstructured mesh, as VTK does not support tree meshes.
+The underlying mechanism is straightforward:
+
+\begin{enumerate}
+  \item If a vertex is touched/read the first time, it is dumped as vertex of
+  the unstructured output mesh if it is not refined, i.e.~if no other vertex
+  does exist at the same location on a finer mesh level.
+  \item If a hanging vertex is created, we add a new vertex to the output dump
+  if this hanging vertex has not been written before. The plotters typically
+  maintain one big hash map to bookkeep which hanging vertices have already been
+  written.
+  \item If the tree traversal runs into an unrefined cell, this cell is made a
+  cell of the unstructured output mesh.
+\end{enumerate}
+
+
+\noindent
+Please note that most visualisation codes (such as Paraview) do interpolate
+bi-/tri-linearly within the cells. 
+If a cell's face is adjacent to cells on finer levels, hanging vertices on the
+face exist.
+If they do not hold the linearly interpolated value, you will discover
+visualisation artifacts.
+
+\begin{remark}
+  For smooth output pictures of meshes with adaptivity, you have to 
+  \begin{itemize}
+    \item set the plotted properties on hanging vertices due to $d$-linear
+    interpolation, and
+    \item you have to add the plotter mapping after you have invoked the mapping
+    that does initialise the hanging vertices.
+  \end{itemize}
+\end{remark}
+
+
+\noindent
+Please note that the dumped unstructured mesh is a non-conformal mesh. 
+Algorithms such as isosurface identification thus might yield invalid
+results---it depends on your visualisation algorithms.

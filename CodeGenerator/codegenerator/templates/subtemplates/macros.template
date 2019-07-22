@@ -1,0 +1,61 @@
+{# /**
+  This subtemplate contain macros used in other template/subtemplate
+  
+  Include it at the start of a template to be able to use the macros
+  {% import 'subtemplates/macros.template' as m with context %}
+  
+  To use macros with indentation use {{ m.XXmacr(XXargs...) | indent(XXsize) }}
+  and put a jinja comment afterward otherwise you'll get a whitespace after the 
+  macro call (known jinja2 issue, https://github.com/pallets/jinja/issues/612)
+  */
+#}
+{#
+/**
+  Allocate array
+*/
+#}
+{% macro allocateArray(name, size, setToZero=False, pointerExists=False) %}
+{% if tempVarsOnStack %}
+double {{name}}[{{size}}] __attribute__((aligned(ALIGNMENT))){% if setToZero %}  = {0.}{% endif %};
+{% else %}
+{% if not pointerExists %}double* {% endif %}{{name}} = ((double *) _mm_malloc(sizeof(double)*{{size}}, ALIGNMENT));
+{% if setToZero %}
+std::memset({{name}}, 0, sizeof(double)*{{size}});
+{% endif %}
+{% endif %}
+{% endmacro %} {##}
+{#
+
+/**
+  Free array
+*/
+#}
+{% macro freeArray(name) %}
+{% if not tempVarsOnStack %}
+_mm_free({{name}});
+{% endif %}
+{% endmacro %}
+{#
+
+/**
+  Matmul, see the subtemplate
+      C       = alpha  *   A   *    B   + beta  *  C
+   (M x N)              (M x K)  (K x N)
+  The gemm config (fetched through matmulKey) contains M, N, K, LDA, LDB, LDC, alpha and beta
+*/
+#}
+{% macro matmul(matmulKey, A, B, C, A_shift, B_shift, C_shift, overrideUseLibxsmm="BoolNotDefined", trueAlpha="", trueB="", forceCoeffMatrix=False) %}
+{% include "subtemplates/matmul.template" %}
+{% endmacro %}
+{#
+
+/**
+  Allocate stack tmp arrays for vect PDE.
+  Subarray will be allocated too
+  Array = name of the array
+  blockedDim = if there are multiple dim (for example F for flux splitted into x, y, and z)
+*/
+#}
+{% macro vectPDEsArrays(array, size, blockedDim) %}
+{% include 'subtemplates/vectPDEsArrays.template' %}
+{% endmacro %}

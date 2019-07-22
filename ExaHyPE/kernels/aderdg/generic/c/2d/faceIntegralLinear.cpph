@@ -1,0 +1,53 @@
+#include <tarch/la/Vector.h>
+
+#include "../../../../KernelUtils.h"
+#include "kernels/aderdg/generic/Kernels.h"
+
+#if DIMENSIONS == 2
+
+template <int numberOfVariables, int basisSize>
+void kernels::aderdg::generic::c::faceIntegralLinear(double* const lduh, const double *const lFhbnd,
+                                                     const int direction, const int orientation,
+                                                     const tarch::la::Vector<DIMENSIONS, double>& dx) {
+  const double scaling = 1.0/dx[direction];
+
+  constexpr int order = basisSize -1;
+
+  idx3 idx_lduh(basisSize, basisSize, numberOfVariables); // (y,x,var/par)
+  idx2 idx_lFhbnd(basisSize, numberOfVariables);
+  // idx4 idx_lFhbnd(basisSize,basisSize, basisSize, numberOfVariables); // when we add time later
+
+  if( direction == 0 ){   // x-face
+    for (int j = 0; j < basisSize; j++) { // y
+      const double scaledWeight = 
+          kernels::gaussLegendreWeights[order][j] *
+          scaling;
+
+      for (int k = 0; k < basisSize; k++) { // x
+        for (int l = 0; l < numberOfVariables; l++) {
+          lduh[idx_lduh(j, k, l)] -=
+              scaledWeight *
+              kernels::FCoeff[order][orientation][k] *
+              lFhbnd[idx_lFhbnd(j, l)];
+        }
+      }
+    }
+  } else if( direction == 1 ){ // y-face
+    for (int j = 0; j < basisSize; j++) { // y
+      for (int k = 0; k < basisSize; k++) { // x
+        const double scaledWeight =
+            kernels::gaussLegendreWeights[order][k] *
+            scaling;
+
+        for (int l = 0; l < numberOfVariables; l++) {
+          lduh[idx_lduh(j, k, l)] -=
+              scaledWeight *
+              kernels::FCoeff[order][orientation][j] *
+              lFhbnd[idx_lFhbnd(k, l)];
+        }
+      }
+    }
+  }
+}
+
+#endif

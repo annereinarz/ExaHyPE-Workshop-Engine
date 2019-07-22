@@ -1,0 +1,410 @@
+// This file is part of the Peano project. For conditions of distribution and 
+// use, please see the copyright notice at www.peano-framework.org
+#ifndef __INCLUDE_GUARD_PREFIX___ADAPTERS___THIS_TYPENAME___H_
+#define __INCLUDE_GUARD_PREFIX___ADAPTERS___THIS_TYPENAME___H_
+
+
+#include "tarch/logging/Log.h"
+#include "tarch/multicore/MulticoreDefinitions.h"
+
+#include "peano/MappingSpecification.h"
+#include "peano/CommunicationSpecification.h"
+#include "peano/grid/VertexEnumerator.h"
+
+#include "__PROJECT_PATH__/Vertex.h"
+#include "__PROJECT_PATH__/Cell.h"
+#include "__PROJECT_PATH__/State.h"
+
+
+__OPEN_NAMESPACE__
+      namespace adapters {
+        class __THIS_TYPENAME__;
+      } 
+__CLOSE_NAMESPACE__
+
+
+/**
+ * This is an adapter providing a multiscale linked-cell data structure
+ *
+ * PARAM0   Name of the index used for the cell indices within the vertex and 
+ *          the cell
+ *
+ * @author Tobias Weinzierl
+ * @version $Revision: 1.1 $
+ */
+class __NAMESPACE__::adapters::__THIS_TYPENAME__ {
+  public:
+    static peano::MappingSpecification   touchVertexLastTimeSpecification();
+    static peano::MappingSpecification   touchVertexFirstTimeSpecification();
+    static peano::MappingSpecification   enterCellSpecification();
+    static peano::MappingSpecification   leaveCellSpecification();
+    static peano::MappingSpecification   ascendSpecification();
+    static peano::MappingSpecification   descendSpecification();
+    static peano::CommunicationSpecification   communicationSpecification();
+
+    __THIS_TYPENAME__();
+
+    #if defined(SharedMemoryParallelisation)
+    __THIS_TYPENAME__(const __THIS_TYPENAME__& masterThread);
+    #endif
+
+    virtual ~__THIS_TYPENAME__();
+  
+    #if defined(SharedMemoryParallelisation)
+    void mergeWithWorkerThread(const __THIS_TYPENAME__& workerThread);
+    #endif
+
+    void createInnerVertex(
+      __NAMESPACE__::Vertex&               fineGridVertex,
+      const tarch::la::Vector<DIMENSIONS,double>&                          fineGridX,
+      const tarch::la::Vector<DIMENSIONS,double>&                          fineGridH,
+      __NAMESPACE__::Vertex * const        coarseGridVertices,
+      const peano::grid::VertexEnumerator&                coarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&                 coarseGridCell,
+      const tarch::la::Vector<DIMENSIONS,int>&                             fineGridPositionOfVertex
+    );
+
+
+    void createBoundaryVertex(
+      __NAMESPACE__::Vertex&               fineGridVertex,
+      const tarch::la::Vector<DIMENSIONS,double>&                          fineGridX,
+      const tarch::la::Vector<DIMENSIONS,double>&                          fineGridH,
+      __NAMESPACE__::Vertex * const        coarseGridVertices,
+      const peano::grid::VertexEnumerator&                coarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&                 coarseGridCell,
+      const tarch::la::Vector<DIMENSIONS,int>&                             fineGridPositionOfVertex
+    );
+
+
+    /**
+     * @todo Only half of the documentation
+     * @todo Enumeration has changed
+     *
+     * In an adaptive grid, not all of the $2^d$ adjacent cells exist for hanging
+     * vertices. Since each vertex is supposed to hold the adjacent vertices in
+     * order to fill the ghostlayers of the cellDescriptiones appropriately, the adjacent
+     * indices of hanging vertices need to be filled by the data of the vertices
+     * on the next coarser grid. This filling is implemented in this method.
+     *
+     * !!! The idea
+     * Each vertex holds $2^d$ indices. In the vertices they are numbered from 0
+     * to $2^d-1$. However, in this method they are considered to exist in a
+     * n-dimensional array. In 2d this would look like
+     *
+     * (0,1)|(1,1)
+     * -----v-----
+     * (0,0)|(1,0)
+     *
+     * The linearization looks as follow:
+     *
+     *   1  |  0
+     * -----v-----
+     *   3  |  2
+     *
+     * In the following the term "fine grid" refers to the $4^d$ vertices
+     * belonging to the $3^d$ fine grid cells which overlap with the coars grid
+     * cell.
+     *
+     * On the coarse grid cell we again consider the vertices being arranged in a
+     * n-dimensional array:
+     *
+     * (0,1)-----(1,1)
+     *   |          |
+     *   |          |
+     *   |          |
+     * (0,0)-----(1,0)
+     *
+     * Each of them hold again the $2^d$ adjacent indices, while those which refer
+     * to a refined cell are set to -1. A hanging vertex therefore gets the
+     * adjacent indices from the nearest coarse grid vertex. If they coincide the
+     * data can just be used directly. If not, it depends on which boundary of the
+     * coarse grid cell the hanging vertex resides. Here the (single) index
+     * outside of the coarse grid cell is assigned for all indices of the hanging
+     * vertex pointing in the direction of this neighboring coarse grid cell.
+     *
+     * !!! The algorithm
+     * It gets a hanging vertex and performs a loop over the $2^d$ adjacent-cellDescription-
+     * indices.
+     * In each loop iteration it computes the n-dimensional index of the coarse
+     * grid vertex (fromCoarseGridVertex) from which the data has to be copied.
+     * For each dimension d with $0\le d <n$:
+     *  - If the fine grid position of the hanging vertex in dimension $d$ is 0 set
+     *    $fromCoarseGridVertex(d)$ to 0. If it is equals 3 then set
+     *    $fromCoarseGridVertex(d)$ to 1. By this we ensure that we always choose
+     *    the nearest coarse grid vertex in dimension $d$. If the hanging vertex
+     *    resides in a corner of the fine grid this approach always chooses the
+     *    coarse grid vertex that is located on the same position.
+     *  - If the fine grid position of the hanging vertex in dimension $d$ is
+     *    neither 0 nor 3 then the value of $fromCoarseGridVertex(d)$ depends on
+     *    the adjacent-cellDescription-index $k$ that has to be set currently. $k(d)$ can
+     *    either be 0 or 1. If $k(d)$ is 0 than we want to get data from the
+     *    in this dimension "lower" coarse grid vertex, so we set
+     *    $fromCoarseGridVertex(d)$ to 0 as well. In the case of $k(d)=1$ we set
+     *    $fromCoarseGridVertex(d)$ to 1, accordingly. This actually doesn't
+     *    matter since the appropriate adjacent-cellDescription-indices of the to coarse
+     *    grid vertices have to be the same, since they are pointing to the same
+     *    adjacent cell.
+     * The determination of the correct adjacent-cellDescription-index of the coarse grid
+     * vertex (coarseGridVertexAdjacentCellDescriptionIndex) is done in a similar way. So,
+     * for the adjacent-cellDescription-index $k$ on the hanging vertex:
+     *  - As stated before, if the fine and coarse grid vertices coincide we can
+     *    just copy the adjacent-cellDescription-index. Therefore, if the fine grid position
+     *    of the hanging vertex in dimension $d$ is equal to 0 or to 3, we set
+     *    $coarseGridVertexAdjacentCellDescriptionIndex(d)$ to $k(d)$.
+     *  - Otherwise, we just set $coarseGridVertexAdjacentCellDescriptionIndex(d)$ to the
+     *    inverted $k(d)$. I.e. if $k(d) = 0$ we set
+     *    $coarseGridVertexAdjacentCellDescriptionIndex(d)$ to 1 and the other way around.
+     *
+     */
+    void createHangingVertex(
+      __NAMESPACE__::Vertex&               fineGridVertex,
+      const tarch::la::Vector<DIMENSIONS,double>&                          fineGridX,
+      const tarch::la::Vector<DIMENSIONS,double>&                          fineGridH,
+      __NAMESPACE__::Vertex * const        coarseGridVertices,
+      const peano::grid::VertexEnumerator&                coarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&                 coarseGridCell,
+      const tarch::la::Vector<DIMENSIONS,int>&                             fineGridPositionOfVertex
+    );
+
+
+    void destroyHangingVertex(
+      const __NAMESPACE__::Vertex&   fineGridVertex,
+      const tarch::la::Vector<DIMENSIONS,double>&                    fineGridX,
+      const tarch::la::Vector<DIMENSIONS,double>&                    fineGridH,
+      __NAMESPACE__::Vertex * const  coarseGridVertices,
+      const peano::grid::VertexEnumerator&          coarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&           coarseGridCell,
+      const tarch::la::Vector<DIMENSIONS,int>&                       fineGridPositionOfVertex
+    );
+
+
+    void destroyVertex(
+      const __NAMESPACE__::Vertex&   fineGridVertex,
+      const tarch::la::Vector<DIMENSIONS,double>&                    fineGridX,
+      const tarch::la::Vector<DIMENSIONS,double>&                    fineGridH,
+      __NAMESPACE__::Vertex * const  coarseGridVertices,
+      const peano::grid::VertexEnumerator&          coarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&           coarseGridCell,
+      const tarch::la::Vector<DIMENSIONS,int>&                       fineGridPositionOfVertex
+    );
+
+
+    void createCell(
+      __NAMESPACE__::Cell&                 fineGridCell,
+      __NAMESPACE__::Vertex * const         fineGridVertices,
+      const peano::grid::VertexEnumerator&                fineGridVerticesEnumerator,
+      __NAMESPACE__::Vertex * const        coarseGridVertices,
+      const peano::grid::VertexEnumerator&                coarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&                 coarseGridCell,
+      const tarch::la::Vector<DIMENSIONS,int>&                             fineGridPositionOfCell
+    );
+
+
+    void destroyCell(
+      const __NAMESPACE__::Cell&           fineGridCell,
+      __NAMESPACE__::Vertex * const        fineGridVertices,
+      const peano::grid::VertexEnumerator&                fineGridVerticesEnumerator,
+      __NAMESPACE__::Vertex * const        coarseGridVertices,
+      const peano::grid::VertexEnumerator&                coarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&                 coarseGridCell,
+      const tarch::la::Vector<DIMENSIONS,int>&                             fineGridPositionOfCell
+    );
+        
+    #ifdef Parallel
+    void mergeWithNeighbour(
+      __NAMESPACE__::Vertex&  vertex,
+      const __NAMESPACE__::Vertex&  neighbour,
+      int                                           fromRank,
+      const tarch::la::Vector<DIMENSIONS,double>&   x,
+      const tarch::la::Vector<DIMENSIONS,double>&   h,
+      int                                           level
+    );
+
+    void prepareSendToNeighbour(
+      __NAMESPACE__::Vertex&  vertex,
+      int                                           toRank,
+      const tarch::la::Vector<DIMENSIONS,double>&   x,
+      const tarch::la::Vector<DIMENSIONS,double>&   h,
+      int                                           level
+    );
+
+    void prepareCopyToRemoteNode(
+      __NAMESPACE__::Vertex&  localVertex,
+      int                                           toRank,
+      const tarch::la::Vector<DIMENSIONS,double>&   x,
+      const tarch::la::Vector<DIMENSIONS,double>&   h,
+      int                                           level
+    );
+
+    void prepareCopyToRemoteNode(
+      __NAMESPACE__::Cell&  localCell,
+      int                                           toRank,
+      const tarch::la::Vector<DIMENSIONS,double>&   cellCentre,
+      const tarch::la::Vector<DIMENSIONS,double>&   cellSize,
+      int                                           level
+    );
+
+    void mergeWithRemoteDataDueToForkOrJoin(
+      __NAMESPACE__::Vertex&  localVertex,
+      const __NAMESPACE__::Vertex&  masterOrWorkerVertex,
+      int                                       fromRank,
+      const tarch::la::Vector<DIMENSIONS,double>&  x,
+      const tarch::la::Vector<DIMENSIONS,double>&  h,
+      int                                       level
+    );
+
+    void mergeWithRemoteDataDueToForkOrJoin(
+      __NAMESPACE__::Cell&  localCell,
+      const __NAMESPACE__::Cell&  masterOrWorkerCell,
+      int                                       fromRank,
+      const tarch::la::Vector<DIMENSIONS,double>&  cellCentre,
+      const tarch::la::Vector<DIMENSIONS,double>&  cellSize,
+      int                                       level
+    );
+
+    bool prepareSendToWorker(
+      __NAMESPACE__::Cell&                 fineGridCell,
+      __NAMESPACE__::Vertex * const        fineGridVertices,
+      const peano::grid::VertexEnumerator&                fineGridVerticesEnumerator,
+      __NAMESPACE__::Vertex * const        coarseGridVertices,
+      const peano::grid::VertexEnumerator&                coarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&                 coarseGridCell,
+      const tarch::la::Vector<DIMENSIONS,int>&                             fineGridPositionOfCell,
+      int                                                                  worker
+    );
+
+    void prepareSendToMaster(
+      __NAMESPACE__::Cell&                       localCell,
+      __NAMESPACE__::Vertex *                    vertices,
+      const peano::grid::VertexEnumerator&       verticesEnumerator, 
+      const __NAMESPACE__::Vertex * const        coarseGridVertices,
+      const peano::grid::VertexEnumerator&       coarseGridVerticesEnumerator,
+      const __NAMESPACE__::Cell&                 coarseGridCell,
+      const tarch::la::Vector<DIMENSIONS,int>&   fineGridPositionOfCell
+    );
+
+    void mergeWithMaster(
+      const __NAMESPACE__::Cell&           workerGridCell,
+      __NAMESPACE__::Vertex * const        workerGridVertices,
+      const peano::grid::VertexEnumerator& workerEnumerator,
+      __NAMESPACE__::Cell&                 fineGridCell,
+      __NAMESPACE__::Vertex * const        fineGridVertices,
+      const peano::grid::VertexEnumerator&                fineGridVerticesEnumerator,
+      __NAMESPACE__::Vertex * const        coarseGridVertices,
+      const peano::grid::VertexEnumerator&                coarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&                 coarseGridCell,
+      const tarch::la::Vector<DIMENSIONS,int>&                             fineGridPositionOfCell,
+      int                                                                  worker,
+      const __NAMESPACE__::State&          workerState,
+      __NAMESPACE__::State&                masterState
+    );
+
+
+    void receiveDataFromMaster(
+      __NAMESPACE__::Cell&                        receivedCell, 
+      __NAMESPACE__::Vertex *                     receivedVertices,
+      const peano::grid::VertexEnumerator&        receivedVerticesEnumerator,
+      __NAMESPACE__::Vertex * const               receivedCoarseGridVertices,
+      const peano::grid::VertexEnumerator&        receivedCoarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&                        receivedCoarseGridCell,
+      __NAMESPACE__::Vertex * const               workersCoarseGridVertices,
+      const peano::grid::VertexEnumerator&        workersCoarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&                        workersCoarseGridCell,
+      const tarch::la::Vector<DIMENSIONS,int>&    fineGridPositionOfCell
+    );
+
+
+    void mergeWithWorker(
+      __NAMESPACE__::Cell&           localCell, 
+      const __NAMESPACE__::Cell&     receivedMasterCell,
+      const tarch::la::Vector<DIMENSIONS,double>&  cellCentre,
+      const tarch::la::Vector<DIMENSIONS,double>&  cellSize,
+      int                                          level
+    );
+
+
+    void mergeWithWorker(
+      __NAMESPACE__::Vertex&        localVertex,
+      const __NAMESPACE__::Vertex&  receivedMasterVertex,
+      const tarch::la::Vector<DIMENSIONS,double>&   x,
+      const tarch::la::Vector<DIMENSIONS,double>&   h,
+      int                                           level
+    );
+    #endif
+
+
+    void touchVertexFirstTime(
+      __NAMESPACE__::Vertex&               fineGridVertex,
+      const tarch::la::Vector<DIMENSIONS,double>&                          fineGridX,
+      const tarch::la::Vector<DIMENSIONS,double>&                          fineGridH,
+      __NAMESPACE__::Vertex * const        coarseGridVertices,
+      const peano::grid::VertexEnumerator&                coarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&                 coarseGridCell,
+      const tarch::la::Vector<DIMENSIONS,int>&                             fineGridPositionOfVertex
+    );
+
+
+    void touchVertexLastTime(
+      __NAMESPACE__::Vertex&         fineGridVertex,
+      const tarch::la::Vector<DIMENSIONS,double>&                    fineGridX,
+      const tarch::la::Vector<DIMENSIONS,double>&                    fineGridH,
+      __NAMESPACE__::Vertex * const  coarseGridVertices,
+      const peano::grid::VertexEnumerator&          coarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&           coarseGridCell,
+      const tarch::la::Vector<DIMENSIONS,int>&                       fineGridPositionOfVertex
+    );
+    
+
+    void enterCell(
+      __NAMESPACE__::Cell&                 fineGridCell,
+      __NAMESPACE__::Vertex * const        fineGridVertices,
+      const peano::grid::VertexEnumerator&                fineGridVerticesEnumerator,
+      __NAMESPACE__::Vertex * const        coarseGridVertices,
+      const peano::grid::VertexEnumerator&                coarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&                 coarseGridCell,
+      const tarch::la::Vector<DIMENSIONS,int>&                             fineGridPositionOfCell
+    );
+
+
+    void leaveCell(
+      __NAMESPACE__::Cell&                          fineGridCell,
+      __NAMESPACE__::Vertex * const                 fineGridVertices,
+      const peano::grid::VertexEnumerator&          fineGridVerticesEnumerator,
+      __NAMESPACE__::Vertex * const                 coarseGridVertices,
+      const peano::grid::VertexEnumerator&          coarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&                          coarseGridCell,
+      const tarch::la::Vector<DIMENSIONS,int>&      fineGridPositionOfCell
+    );
+
+
+    void beginIteration(
+      __NAMESPACE__::State&  solverState
+    );
+
+
+    void endIteration(
+      __NAMESPACE__::State&  solverState
+    );
+
+    void descend(
+      __NAMESPACE__::Cell * const          fineGridCells,
+      __NAMESPACE__::Vertex * const        fineGridVertices,
+      const peano::grid::VertexEnumerator&                fineGridVerticesEnumerator,
+      __NAMESPACE__::Vertex * const        coarseGridVertices,
+      const peano::grid::VertexEnumerator&                coarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&                 coarseGridCell
+    );
+
+
+    void ascend(
+      __NAMESPACE__::Cell * const    fineGridCells,
+      __NAMESPACE__::Vertex * const  fineGridVertices,
+      const peano::grid::VertexEnumerator&          fineGridVerticesEnumerator,
+      __NAMESPACE__::Vertex * const  coarseGridVertices,
+      const peano::grid::VertexEnumerator&          coarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&           coarseGridCell
+    );    
+};
+
+
+#endif

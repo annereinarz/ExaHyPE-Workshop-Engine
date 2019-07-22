@@ -1,0 +1,165 @@
+\section{Performance analysis}
+\label{section:performance-analysis}
+
+\chapterDescription
+  {
+    Less than 10 minutes unless you postprocess a big file.
+  }
+  {
+    You may work with the plain output that Peano writes to the terminal. If you
+    use log filters (cmp.~Chapter \ref{section:logging}), it is important that
+    you know how to switch particular logging infos on. You also need a working
+    Python installation.
+  }
+
+\noindent
+Prior to any parallelisation or tuning discussion, I want to emphasise that it
+usually makes sense first of all to have an idea how Peano is performing from a
+grid point of view. For this, the framework comes along with a rather useful script.
+From hereon, I recommend to use some state-of-the-art performance analysis tool
+to translate the application point of view into a more technical context.
+
+\subsection*{Peano's built-in performance analysis tools}
+
+\begin{itemize}
+  \item Recompile your code with \texttt{-DPerformanceAnalysis}. For the
+    performance analysis, it usually makes sense to compile with the highest
+    optimisation level and to disable \texttt{-DDebug} and \texttt{-DAsserts}.
+  \item Ensure that  you use the \texttt{CommandLineLogger} as output device.
+    This is the default Peano logger, so unless you have written your own log
+    format, no further action should be necessary.
+  \item Ensure that your \texttt{CommandLineLogger} plots the time stamp in a
+    machine-readable way, that it uses tabs or spaces as entry separators, it
+    plots the trace, and it plots the machine name (if you use MPI). There's an operation on the logger that allows you to do
+    exactly this:
+    \begin{code}
+tarch::logging::CommandLineLogger::getInstance().setLogFormat(
+  " ",    // columnSeparator has to be a space or a tab
+  true,   // logTimeStamp has to be set to true
+  ...,    // logTimeStampHumanReadable is not important for the performance analysis
+  true,   // logMachineName has to be true if you profile MPI codes
+  ...,    // logMessageType is not relevant for the performance analysis 
+  true,   // logTrace has to be set
+  ...
+);
+    \end{code} 
+  \item Run your code and ensure that \texttt{info} outputs from the
+    \texttt{peano::performanceanalysis} component are enabled.
+  \item Pipe the output into a file:
+    \begin{code}
+> ./myExecutable myArguments > outputfile.txt
+    \end{code} 
+    We call this file \texttt{outputfile.txt} from hereon.
+  \item Pass the output file to Peano's performance analysis script written in
+  Python. 
+    \begin{code}
+> python <mypath>/peano/performanceanalysis/performanceanalysis.py 
+    \end{code} 
+    Calling it without any options displays a usage message.
+  \item Open the web browser of your choice and the generated files (typically
+  your Peano output file with an additional \texttt{html} extension).
+\end{itemize}
+
+\begin{remark}
+The present document suggests to pipe all output data from the terminal into a
+file and to process this file. 
+For many applications with low rank count this works fine.
+The more ranks you have however the higher the probability that concurrent
+writes to the terminal mess up your piped file.
+In most cases, the performance analysis still succeeds. 
+However, there are cases where the postprocessing fails.
+In this case, it is better to use \texttt{setLogFormat} of the
+\texttt{CommandLineLogger} to make the logger pipe output from different ranks
+into different files.
+There's an additional script in the \texttt{performanceanalysis} directory that
+you can then use to fuse the various output files into one file before you start
+the actual postprocessing.
+\end{remark}
+
+
+
+\noindent
+If you browse through your directory, you will notice that all graphs are
+written both as png and as pdf. 
+You can thus integrate them directly into your \LaTeX\ reports.
+Most generated graphs also are available in an increased resolution. 
+These files have a \texttt{.large.} inserted into their extension.
+
+
+\subsection*{Study only particular phases of your code}
+
+If you run the whole performance analysis over a longer Peano simultion, the
+amount of data produced quickly becomes massive and hard to handle, and the generation of
+these massive data even might pollute your results. 
+In your code, you can always switch all performance analysis off. 
+To do so, invoke
+\begin{code}
+  peano::performanceanalysis::Analysis::getInstance().enable(false);
+\end{code}
+
+\noindent
+and call the same routine later on again with a \texttt{true} argument.
+
+In a parallel environment, you have to switch the analysis on or off per rank,
+i.e.~the analysis does not coordinate via MPI. 
+
+\subsection*{Score-P/Scalasca}
+
+We use Peano with Score-P\footnote{\url{http://www.vi-hps.org/projects/score-p}}
+which is used by Scalasca\footnote{\url{http://http://www.scalasca.org/}}, e.g.
+Score-P however tends to yield massive amounts of data. 
+Peano can manually turn Score-P data aquisition on/off within the code. 
+To enable this feature,
+\begin{enumerate}
+  \item retranslate your code with \texttt{-DUseScoreP},
+  \item ensure you use the performance analysis as detail ed above, and
+  \item switch the performance analysis on and off suiting your demands as it is
+  detailed in the previous paragraphs.
+\end{enumerate}
+
+
+\noindent
+Internally, Peano's performance analysis deactivates and activates the Score-P
+tracing through
+\begin{code}
+SCOREP_RECORDING_ON()
+SCOREP_RECORDING_OFF()
+\end{code}
+
+\noindent 
+Furthermore, Peano annotates its routines/phases with traces through the 
+\begin{code} 
+SCOREP_USER_REGION("...", SCOREP_USER_REGION_TYPE_FUNCTION)
+\end{code}
+command added as preamble to its core routines. 
+The string is the trace of the routine.
+
+
+To translate an instrumented\footnote{
+  We have faces issues with installing Score-P on our OpenSUSE installations which went away when I changed into 
+  \texttt{/lib64} and created a link there: \texttt{ln -s libz.so.1 libz.so}.
+} 
+code, please use
+\begin{code}
+scorep --noonline-access --nocompiler --mpp=mpi  --thread=none --user mpicxx
+scorep --noonline-access --nocompiler --mpp=none  --thread=none --user icpc
+\end{code}
+
+
+\subsection*{Intel's VTune Amplifier}
+
+Intel's VTune Amplifier sometimes yields data that is very hard to interpret if
+you use TBB, our preferred multithreading code base. 
+It is convenient to translate the code with \linebreak
+\texttt{-DTBB\_USE\_THREADING\_TOOLS} and thus to enrich the executable (also
+ensure \texttt{-g} is enabled such that the profiler can map insight onto code
+fragments.
+
+
+TBB's work stealing traditionally results in enormous spin times. To clarify
+where these guys are coming from, you should recompile with \texttt{-debug all}.
+However, this effectively switches off the optimisation. It is therefore only to
+be used to dive into performance issues you have identified with your optimised
+code.
+
+

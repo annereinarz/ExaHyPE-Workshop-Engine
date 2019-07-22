@@ -1,0 +1,925 @@
+#include "__PROJECT_PATH__/adapters/__THIS_TYPENAME__.h"
+#include "__PROJECT_PATH__/VertexOperations.h"
+
+#include <sstream>
+
+#include "peano/utils/Loop.h"
+#include "peano/grid/CellFlags.h"
+
+#include "particles/PIDTParticles.h"
+
+#ifdef Parallel
+#include "tarch/parallel/Node.h"
+#endif
+
+#include "tarch/multicore/Lock.h"
+
+
+tarch::multicore::BooleanSemaphore  __THIS_QUALIFIED_TYPENAME__::_gridSemaphore;
+tarch::multicore::BooleanSemaphore  __THIS_QUALIFIED_TYPENAME__::_globalVariablesSemaphore;
+
+
+peano::CommunicationSpecification   __THIS_QUALIFIED_TYPENAME__::communicationSpecification() {
+  if (PARAM4) {
+    return peano::CommunicationSpecification(
+      peano::CommunicationSpecification::SendDataAndStateBeforeDescendIntoLocalSubtree,
+      peano::CommunicationSpecification::SendDataAndStateAfterProcessingOfLocalSubtree,
+      true
+    );
+  }
+  else {
+    return peano::CommunicationSpecification(
+      peano::CommunicationSpecification::SendDataAndStateBeforeDescendIntoLocalSubtree,
+      peano::CommunicationSpecification::MaskOutWorkerMasterDataAndStateExchange,
+      true
+    );
+  }
+}
+
+
+peano::MappingSpecification   __THIS_QUALIFIED_TYPENAME__::touchVertexLastTimeSpecification() {
+  return peano::MappingSpecification(peano::MappingSpecification::WholeTree,peano::MappingSpecification::AvoidCoarseGridRaces);
+}
+
+
+peano::MappingSpecification   __THIS_QUALIFIED_TYPENAME__::touchVertexFirstTimeSpecification() { 
+  return peano::MappingSpecification(peano::MappingSpecification::Nop,peano::MappingSpecification::RunConcurrentlyOnFineGrid);
+}
+
+
+peano::MappingSpecification   __THIS_QUALIFIED_TYPENAME__::enterCellSpecification() {
+  return peano::MappingSpecification(peano::MappingSpecification::WholeTree,peano::MappingSpecification::RunConcurrentlyOnFineGrid);
+}
+
+
+peano::MappingSpecification   __THIS_QUALIFIED_TYPENAME__::leaveCellSpecification() {
+  return peano::MappingSpecification(peano::MappingSpecification::WholeTree,peano::MappingSpecification::AvoidCoarseGridRaces);
+}
+
+
+peano::MappingSpecification   __THIS_QUALIFIED_TYPENAME__::ascendSpecification() {
+  return peano::MappingSpecification(peano::MappingSpecification::Nop,peano::MappingSpecification::RunConcurrentlyOnFineGrid);
+}
+
+
+peano::MappingSpecification   __THIS_QUALIFIED_TYPENAME__::descendSpecification() {
+  return peano::MappingSpecification(peano::MappingSpecification::WholeTree,peano::MappingSpecification::AvoidCoarseGridRaces);
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::liftParticles(
+  PARAM0::HeapEntries&     particles,
+  __NAMESPACE__::Vertex * const              coarseGridVertices,
+  const peano::grid::VertexEnumerator&         coarseGridVerticesEnumerator,
+  const tarch::la::Vector<DIMENSIONS,int>&     fineGridPositionOfVertex
+) {
+  if (!particles.empty()) {
+    tarch::la::Vector<DIMENSIONS,int> coarseGridVertex;
+    for (int d=0; d<DIMENSIONS; d++) {
+      coarseGridVertex(d) = fineGridPositionOfVertex(d)>1 ? 1 : 0;
+    }
+    
+    particles::PIDTParticles::numberOfLifts += particles.size();
+
+    const int coarseGridVertexIndex = VertexOperations::readPidtVertexIndex( coarseGridVertices[ coarseGridVerticesEnumerator(coarseGridVertex) ] );
+
+    PARAM0::getInstance().addData( coarseGridVertexIndex, particles );
+  }
+}
+
+
+__THIS_QUALIFIED_TYPENAME__::__THIS_TYPENAME__() {
+}
+
+
+__THIS_QUALIFIED_TYPENAME__::~__THIS_TYPENAME__() {
+}
+
+
+#if defined(SharedMemoryParallelisation)
+__THIS_QUALIFIED_TYPENAME__::__THIS_TYPENAME__(const __THIS_TYPENAME__&  masterThread) {
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::mergeWithWorkerThread(const __THIS_TYPENAME__& workerThread) {
+}
+#endif
+
+
+
+void __THIS_QUALIFIED_TYPENAME__::createHangingVertex(
+      __NAMESPACE__::Vertex&     fineGridVertex,
+      const tarch::la::Vector<DIMENSIONS,double>&                fineGridX,
+      const tarch::la::Vector<DIMENSIONS,double>&                fineGridH,
+      __NAMESPACE__::Vertex * const   coarseGridVertices,
+      const peano::grid::VertexEnumerator&      coarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&       coarseGridCell,
+      const tarch::la::Vector<DIMENSIONS,int>&                   fineGridPositionOfVertex
+) {
+  if (PARAM3) {
+    VertexOperations::writePidtVertexIndex( fineGridVertex, PARAM0::getInstance().createData() );
+  }
+  else {
+    PARAM0::getInstance().createDataForIndex( 
+      VertexOperations::readPidtVertexIndex( fineGridVertex )
+    );
+  }
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::destroyHangingVertex(
+      const __NAMESPACE__::Vertex&   fineGridVertex,
+      const tarch::la::Vector<DIMENSIONS,double>&                    fineGridX,
+      const tarch::la::Vector<DIMENSIONS,double>&                    fineGridH,
+      __NAMESPACE__::Vertex * const  coarseGridVertices,
+      const peano::grid::VertexEnumerator&          coarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&           coarseGridCell,
+      const tarch::la::Vector<DIMENSIONS,int>&                       fineGridPositionOfVertex
+) {
+  assertion3(
+    PARAM0::getInstance().isValidIndex( VertexOperations::readPidtVertexIndex( fineGridVertex ) ),
+    fineGridVertex.toString(), fineGridX, fineGridH
+  );
+
+  liftParticles(
+    PARAM0::getInstance().getData( VertexOperations::readPidtVertexIndex( fineGridVertex ) ),
+    coarseGridVertices,
+    coarseGridVerticesEnumerator,
+    fineGridPositionOfVertex
+  );
+  PARAM0::getInstance().deleteData( VertexOperations::readPidtVertexIndex( fineGridVertex ) );
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::createInnerVertex(
+  __NAMESPACE__::Vertex&               fineGridVertex,
+  const tarch::la::Vector<DIMENSIONS,double>&                          fineGridX,
+  const tarch::la::Vector<DIMENSIONS,double>&                          fineGridH,
+  __NAMESPACE__::Vertex * const        coarseGridVertices,
+  const peano::grid::VertexEnumerator&                coarseGridVerticesEnumerator,
+  __NAMESPACE__::Cell&                 coarseGridCell,
+  const tarch::la::Vector<DIMENSIONS,int>&                             fineGridPositionOfVertex
+) {
+  if (PARAM3) {
+    VertexOperations::writePidtVertexIndex( fineGridVertex, PARAM0::getInstance().createData() );
+  }
+  else {
+    PARAM0::getInstance().createDataForIndex( 
+      VertexOperations::readPidtVertexIndex( fineGridVertex )
+    );
+  }
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::createBoundaryVertex(
+  __NAMESPACE__::Vertex&               fineGridVertex,
+  const tarch::la::Vector<DIMENSIONS,double>&                          fineGridX,
+  const tarch::la::Vector<DIMENSIONS,double>&                          fineGridH,
+  __NAMESPACE__::Vertex * const        coarseGridVertices,
+  const peano::grid::VertexEnumerator&                coarseGridVerticesEnumerator,
+  __NAMESPACE__::Cell&                 coarseGridCell,
+  const tarch::la::Vector<DIMENSIONS,int>&                             fineGridPositionOfVertex
+) {
+  VertexOperations::writePidtVertexIndex( fineGridVertex, PARAM0::getInstance().createData() );
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::destroyVertex(
+  const __NAMESPACE__::Vertex&   fineGridVertex,
+  const tarch::la::Vector<DIMENSIONS,double>&                    fineGridX,
+  const tarch::la::Vector<DIMENSIONS,double>&                    fineGridH,
+  __NAMESPACE__::Vertex * const  coarseGridVertices,
+  const peano::grid::VertexEnumerator&          coarseGridVerticesEnumerator,
+  __NAMESPACE__::Cell&           coarseGridCell,
+  const tarch::la::Vector<DIMENSIONS,int>&                       fineGridPositionOfVertex
+) {
+  assertion3(
+    PARAM0::getInstance().isValidIndex( VertexOperations::readPidtVertexIndex( fineGridVertex ) ),
+    fineGridVertex.toString(), fineGridX, fineGridH
+  );
+
+  liftParticles(
+    PARAM0::getInstance().getData( VertexOperations::readPidtVertexIndex( fineGridVertex ) ),
+    coarseGridVertices,
+    coarseGridVerticesEnumerator,
+    fineGridPositionOfVertex
+  );
+  PARAM0::getInstance().deleteData( VertexOperations::readPidtVertexIndex( fineGridVertex ) );
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::createCell(
+      __NAMESPACE__::Cell&                 fineGridCell,
+      __NAMESPACE__::Vertex * const        fineGridVertices,
+      const peano::grid::VertexEnumerator&                fineGridVerticesEnumerator,
+      __NAMESPACE__::Vertex * const        coarseGridVertices,
+      const peano::grid::VertexEnumerator&                coarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&                 coarseGridCell,
+      const tarch::la::Vector<DIMENSIONS,int>&                             fineGridPositionOfCell
+) {
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::destroyCell(
+      const __NAMESPACE__::Cell&           fineGridCell,
+      __NAMESPACE__::Vertex * const        fineGridVertices,
+      const peano::grid::VertexEnumerator&                fineGridVerticesEnumerator,
+      __NAMESPACE__::Vertex * const        coarseGridVertices,
+      const peano::grid::VertexEnumerator&                coarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&                 coarseGridCell,
+      const tarch::la::Vector<DIMENSIONS,int>&                             fineGridPositionOfCell
+) {
+}
+
+
+#ifdef Parallel
+void __THIS_QUALIFIED_TYPENAME__::mergeWithNeighbour(
+  __NAMESPACE__::Vertex&  vertex,
+  const __NAMESPACE__::Vertex&  neighbour,
+  int                                           fromRank,
+  const tarch::la::Vector<DIMENSIONS,double>&   fineGridX,
+  const tarch::la::Vector<DIMENSIONS,double>&   fineGridH,
+  int                                           level
+) {
+  if (!vertex.isOutside()) {
+    assertion3(
+      PARAM0::getInstance().isValidIndex( VertexOperations::readPidtVertexIndex( vertex ) ),
+      vertex.toString(), fineGridX, fineGridH
+    );
+
+    #if defined(Asserts) || defined(Asserts)
+    const int receiveEntries =
+    #endif
+    PARAM0::getInstance().receiveData(
+      VertexOperations::readPidtVertexIndex( vertex ),
+      fromRank,
+      fineGridX,
+      level,
+      peano::heap::NeighbourCommunication
+    );
+
+    assertion3(
+      PARAM0::getInstance().isValidIndex( VertexOperations::readPidtVertexIndex( vertex ) ),
+      vertex.toString(), fineGridX, fineGridH
+    );
+
+    #ifdef Asserts
+    for (
+      PARAM0::HeapEntries::const_iterator p = PARAM0::getInstance().getData(VertexOperations::readPidtVertexIndex( vertex )).begin();
+      p != PARAM0::getInstance().getData(VertexOperations::readPidtVertexIndex( vertex )).end();
+      p++
+    ) {
+      assertion8(
+        particles::PIDTParticles::isContainedInDualCell(fineGridX,fineGridH,p->_persistentRecords._x),
+        fineGridX,fineGridH,p->toString(),p->_persistentRecords._x - fineGridX,level,
+        vertex.toString(), fromRank, receiveEntries
+      );
+
+      const int  whichAdjacentCellHoldsParticle =
+        peano::utils::dLinearised(particles::PIDTParticles::getDualCellOfParticle(fineGridX,p->_persistentRecords._x),2);
+
+      const bool particleIsOnLocalRank = vertex.getAdjacentRanks()(whichAdjacentCellHoldsParticle)==tarch::parallel::Node::getInstance().getRank();
+
+      assertion8(
+        particleIsOnLocalRank,
+        fineGridX,fineGridH,p->toString(),p->_persistentRecords._x - fineGridX,level,
+        vertex.toString(), fromRank, receiveEntries
+      );
+    }
+    #endif
+  }
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::prepareSendToNeighbour(
+      __NAMESPACE__::Vertex&  vertex,
+      int                                           toRank,
+      const tarch::la::Vector<DIMENSIONS,double>&   x,
+      const tarch::la::Vector<DIMENSIONS,double>&   h,
+      int                                           level
+) {
+  if (!vertex.isOutside()) {
+    assertion5(
+      PARAM0::getInstance().isValidIndex( VertexOperations::readPidtVertexIndex( vertex ) ),
+      vertex.toString(), toRank, x, h, level 
+    );
+  
+    PARAM0::HeapEntries  destinationParticles = extractAllParticlesFromDualCellBelongingToOneRank(
+      VertexOperations::readPidtVertexIndex( vertex ),
+      vertex,
+      toRank,
+      x,
+      h
+    );
+
+    for (
+      PARAM0::HeapEntries::iterator p = destinationParticles.begin();
+      p != destinationParticles.end();
+      p++
+    ) {
+      p->setMovedParticle( PARAM0::HeapEntries::value_type::New );
+
+      assertion5(
+        particles::PIDTParticles::isContainedInDualCell(x,h,p->_persistentRecords._x),
+        x,h,p->toString(),p->_persistentRecords._x - x,level
+      );
+    }
+
+    PARAM0::getInstance().sendData(
+      destinationParticles,
+      toRank,
+      x,
+      level,
+      peano::heap::NeighbourCommunication
+    );
+  }
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::prepareCopyToRemoteNode(
+      __NAMESPACE__::Vertex&  localVertex,
+      int                                           toRank,
+      const tarch::la::Vector<DIMENSIONS,double>&   x,
+      const tarch::la::Vector<DIMENSIONS,double>&   h,
+      int                                           level
+) {
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::prepareCopyToRemoteNode(
+      __NAMESPACE__::Cell&  localCell,
+      int                                           toRank,
+      const tarch::la::Vector<DIMENSIONS,double>&   cellCentre,
+      const tarch::la::Vector<DIMENSIONS,double>&   cellSize,
+      int                                           level
+) {
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::mergeWithRemoteDataDueToForkOrJoin(
+  __NAMESPACE__::Vertex&  localVertex,
+  const __NAMESPACE__::Vertex&  masterOrWorkerVertex,
+  int                                       fromRank,
+  const tarch::la::Vector<DIMENSIONS,double>&  x,
+  const tarch::la::Vector<DIMENSIONS,double>&  h,
+  int                                       level
+) {
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::mergeWithRemoteDataDueToForkOrJoin(
+  __NAMESPACE__::Cell&  localCell,
+  const __NAMESPACE__::Cell&  masterOrWorkerCell,
+  int                                       fromRank,
+  const tarch::la::Vector<DIMENSIONS,double>&  x,
+  const tarch::la::Vector<DIMENSIONS,double>&  h,
+  int                                       level
+) {
+}
+
+
+bool __THIS_QUALIFIED_TYPENAME__::prepareSendToWorker(
+  __NAMESPACE__::Cell&                 fineGridCell,
+  __NAMESPACE__::Vertex * const        fineGridVertices,
+  const peano::grid::VertexEnumerator&                fineGridVerticesEnumerator,
+  __NAMESPACE__::Vertex * const        coarseGridVertices,
+  const peano::grid::VertexEnumerator&                coarseGridVerticesEnumerator,
+  __NAMESPACE__::Cell&                 coarseGridCell,
+  const tarch::la::Vector<DIMENSIONS,int>&                             fineGridPositionOfCell,
+  int                                                                  worker
+) {
+  dfor2(k)
+    // we always have to send data to the worker, as the master might treat a 
+    // vertex as outside (all adjacent stuff deployed) while the worker sees it 
+    // as inside vertex
+      tarch::la::Vector<DIMENSIONS,int> influencingCoarseGridVertex;
+      for (int d=0; d<DIMENSIONS; d++) {
+        influencingCoarseGridVertex(d) = (fineGridPositionOfCell+k)(d)>1 ? 1 : 0;
+      }
+
+      PARAM0::HeapEntries  destinationParticles;
+
+      if (
+       !tarch::parallel::Node::getInstance().isGlobalMaster()
+       &&
+       !coarseGridVertices[coarseGridVerticesEnumerator(influencingCoarseGridVertex)].isOutside()
+      ) {
+        assertion2(
+          PARAM0::getInstance().isValidIndex( VertexOperations::readPidtVertexIndex( coarseGridVertices[coarseGridVerticesEnumerator(influencingCoarseGridVertex)] ) ),
+          coarseGridVertices[coarseGridVerticesEnumerator(influencingCoarseGridVertex)].toString(), worker
+        );
+      
+        destinationParticles = extractAllParticlesFromDualCellBelongingToOneRank(
+          VertexOperations::readPidtVertexIndex( coarseGridVertices[coarseGridVerticesEnumerator(influencingCoarseGridVertex)] ),
+          fineGridVertices[ fineGridVerticesEnumerator(k) ],
+          worker,
+          fineGridVerticesEnumerator.getVertexPosition(k),
+          fineGridVerticesEnumerator.getCellSize()
+        );
+      }
+
+      PARAM0::getInstance().sendData(
+        destinationParticles,
+        worker,
+        fineGridVerticesEnumerator.getVertexPosition(k),
+        fineGridVerticesEnumerator.getLevel(),
+        peano::heap::MasterWorkerCommunication
+      );
+    // we always do send
+  enddforx
+
+  return PARAM4;
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::prepareSendToMaster(
+      __NAMESPACE__::Cell&                       localCell,
+      __NAMESPACE__::Vertex *                    vertices,
+      const peano::grid::VertexEnumerator&       verticesEnumerator, 
+      const __NAMESPACE__::Vertex * const        coarseGridVertices,
+      const peano::grid::VertexEnumerator&       coarseGridVerticesEnumerator,
+      const __NAMESPACE__::Cell&                 coarseGridCell,
+      const tarch::la::Vector<DIMENSIONS,int>&   fineGridPositionOfCell
+) {
+  dfor2(k)
+    // we always do send
+    PARAM0::HeapEntries   particlesLiftedToMaster;
+
+    if ( !vertices[ verticesEnumerator(k) ].isOutside() ) {
+      assertion1(
+        PARAM0::getInstance().isValidIndex( VertexOperations::readPidtVertexIndex( vertices[ verticesEnumerator(k) ] ) ),
+        vertices[ verticesEnumerator(k) ].toString()
+      );
+
+      PARAM0::HeapEntries&  sourceVertexParticles = PARAM0::getInstance().getData(
+        VertexOperations::readPidtVertexIndex( vertices[ verticesEnumerator(k) ] )
+      );
+
+      for (
+        PARAM0::HeapEntries::iterator p = sourceVertexParticles.begin();
+        p!=sourceVertexParticles.end();
+      ) {
+        if (particles::PIDTParticles::isContainedInDualCell(
+          verticesEnumerator.getVertexPosition(k),
+          verticesEnumerator.getCellSize(),
+          p->_persistentRecords._x)
+        ) {
+          p++;
+        }
+        else {
+          particlesLiftedToMaster.push_back(*p);
+          p = sourceVertexParticles.erase(p);
+        }
+      }
+    }
+
+    PARAM0::getInstance().sendData(
+      particlesLiftedToMaster,
+      tarch::parallel::NodePool::getInstance().getMasterRank(),
+      verticesEnumerator.getVertexPosition(k),
+      verticesEnumerator.getLevel(),
+      peano::heap::MasterWorkerCommunication
+    );
+  enddforx
+
+  PARAM0::getInstance().finishedToSendSynchronousData();
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::mergeWithMaster(
+  const __NAMESPACE__::Cell&           workerGridCell,
+  __NAMESPACE__::Vertex * const        workerGridVertices,
+  const peano::grid::VertexEnumerator& workerEnumerator,
+  __NAMESPACE__::Cell&                 fineGridCell,
+  __NAMESPACE__::Vertex * const        fineGridVertices,
+  const peano::grid::VertexEnumerator&                fineGridVerticesEnumerator,
+  __NAMESPACE__::Vertex * const        coarseGridVertices,
+  const peano::grid::VertexEnumerator&                coarseGridVerticesEnumerator,
+  __NAMESPACE__::Cell&                 coarseGridCell,
+  const tarch::la::Vector<DIMENSIONS,int>&                             fineGridPositionOfCell,
+  int                                                                  worker,
+  const __NAMESPACE__::State&          workerState,
+  __NAMESPACE__::State&                masterState
+) {
+  int totalNumberOfParticles = 0;
+  dfor2(k)
+    //if ( !fineGridVertices[ fineGridVerticesEnumerator(k) ].isOutside() ) {
+      PARAM0::HeapEntries receivedParticles =
+        PARAM0::getInstance().receiveData(
+          worker,
+          fineGridVerticesEnumerator.getVertexPosition(k),
+          fineGridVerticesEnumerator.getLevel(),
+          peano::heap::MasterWorkerCommunication
+        );
+
+      totalNumberOfParticles += static_cast<int>( receivedParticles.size() );
+
+      assertion(
+        !tarch::parallel::Node::getInstance().isGlobalMaster()
+        ||
+        receivedParticles.empty()
+      );
+
+      liftParticles(receivedParticles,coarseGridVertices,coarseGridVerticesEnumerator,fineGridPositionOfCell+k);
+    //}
+  enddforx
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::receiveDataFromMaster(
+      __NAMESPACE__::Cell&                        receivedCell, 
+      __NAMESPACE__::Vertex *                     receivedVertices,
+      const peano::grid::VertexEnumerator&        receivedVerticesEnumerator,
+      __NAMESPACE__::Vertex * const               receivedCoarseGridVertices,
+      const peano::grid::VertexEnumerator&        receivedCoarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&                        receivedCoarseGridCell,
+      __NAMESPACE__::Vertex * const               workersCoarseGridVertices,
+      const peano::grid::VertexEnumerator&        workersCoarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&                        workersCoarseGridCell,
+      const tarch::la::Vector<DIMENSIONS,int>&    fineGridPositionOfCell
+) {
+  dfor2(k)
+    // see remark in prepare send; we always exchange data
+      const int temporaryHeapIndex = PARAM0::getInstance().createData();
+
+      VertexOperations::writePidtVertexIndex( receivedVertices[receivedCoarseGridVerticesEnumerator(k)], temporaryHeapIndex );
+    
+      PARAM0::getInstance().receiveData(
+        temporaryHeapIndex,
+        tarch::parallel::NodePool::getInstance().getMasterRank(),
+        receivedVerticesEnumerator.getVertexPosition(k),
+        receivedVerticesEnumerator.getLevel(),
+        peano::heap::MasterWorkerCommunication
+      );
+
+      #ifdef Asserts
+      for (
+        PARAM0::HeapEntries::const_iterator p = PARAM0::getInstance().getData(temporaryHeapIndex).begin();
+        p != PARAM0::getInstance().getData(temporaryHeapIndex).end();
+        p++
+      ) {
+        assertion4(
+          receivedVerticesEnumerator.overlaps(p->_persistentRecords._x,0.0),
+          p->toString(), receivedVertices[ receivedVerticesEnumerator(k) ].toString(),
+          receivedVerticesEnumerator.toString(), k
+        );
+      }
+      #endif
+    // see remark above - we always send and receive
+  enddforx
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::mergeWithWorker(
+      __NAMESPACE__::Cell&           localCell, 
+      const __NAMESPACE__::Cell&     receivedMasterCell,
+      const tarch::la::Vector<DIMENSIONS,double>&  cellCentre,
+      const tarch::la::Vector<DIMENSIONS,double>&  cellSize,
+      int                                          level
+) {
+}
+
+
+
+__NAMESPACE__::PARAM0::HeapEntries  __THIS_QUALIFIED_TYPENAME__::extractAllParticlesFromDualCellBelongingToOneRank(
+  int                                           sourceHeapIndex,
+  __NAMESPACE__::Vertex&                        vertex,
+  int                                           rank,
+  const tarch::la::Vector<DIMENSIONS,double>&   x,
+  const tarch::la::Vector<DIMENSIONS,double>&   h
+) {
+  PARAM0::HeapEntries  destinationParticles;
+  
+  assertion3(
+    PARAM0::getInstance().isValidIndex( sourceHeapIndex ),
+    vertex.toString(), x, h
+  );
+    
+
+  PARAM0::HeapEntries& localVertexParticles = PARAM0::getInstance().getData(sourceHeapIndex);
+
+  for (
+    PARAM0::HeapEntries::iterator p = localVertexParticles.begin();
+    p!=localVertexParticles.end();
+  ) {
+    const bool particleDoesNotTunnel = particles::PIDTParticles::isContainedInDualCell(x,h,p->_persistentRecords._x);
+
+    const int  whichAdjacentCellHoldsParticle =
+      peano::utils::dLinearised(particles::PIDTParticles::getDualCellOfParticle(x,p->_persistentRecords._x),2);
+
+    const bool particleBelongsToNeighbouringRank = vertex.getAdjacentRanks()(whichAdjacentCellHoldsParticle)==rank;
+
+    if (particleDoesNotTunnel && particleBelongsToNeighbouringRank) {
+      destinationParticles.push_back(*p);
+      p = localVertexParticles.erase(p);
+    }
+    else {
+      p++;
+    }
+  }
+
+  return destinationParticles;
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::mergeWithWorker(
+  __NAMESPACE__::Vertex&        localVertex,
+  const __NAMESPACE__::Vertex&  receivedMasterVertex,
+  const tarch::la::Vector<DIMENSIONS,double>&   x,
+  const tarch::la::Vector<DIMENSIONS,double>&   h,
+  int                                           level
+) {
+  // we always send from master to worker
+  if (localVertex.isOutside()) {
+    assertion(
+      PARAM0::getInstance().getData( VertexOperations::readPidtVertexIndex( receivedMasterVertex ) ).empty()
+    );
+  }
+  else {
+    assertion5(
+      PARAM0::getInstance().isValidIndex( VertexOperations::readPidtVertexIndex( localVertex ) ),
+      localVertex.toString(), receivedMasterVertex.toString(), x, h, level
+    );
+    assertion5(
+      PARAM0::getInstance().isValidIndex( VertexOperations::readPidtVertexIndex( receivedMasterVertex ) ),
+      localVertex.toString(), receivedMasterVertex.toString(), x, h, level
+    );
+
+    PARAM0::getInstance().moveData(
+      VertexOperations::readPidtVertexIndex( localVertex ),
+      VertexOperations::readPidtVertexIndex( receivedMasterVertex )
+    );
+
+    assertion(
+      PARAM0::getInstance().getData( VertexOperations::readPidtVertexIndex( receivedMasterVertex ) ).empty()
+    );
+
+    PARAM0::getInstance().deleteData( VertexOperations::readPidtVertexIndex( receivedMasterVertex ) );
+  }
+}
+#endif
+
+
+void __THIS_QUALIFIED_TYPENAME__::touchVertexFirstTime(
+  __NAMESPACE__::Vertex&               fineGridVertex,
+  const tarch::la::Vector<DIMENSIONS,double>&                          fineGridX,
+  const tarch::la::Vector<DIMENSIONS,double>&                          fineGridH,
+  __NAMESPACE__::Vertex * const        coarseGridVertices,
+  const peano::grid::VertexEnumerator&                coarseGridVerticesEnumerator,
+  __NAMESPACE__::Cell&                 coarseGridCell,
+  const tarch::la::Vector<DIMENSIONS,int>&                             fineGridPositionOfVertex
+) {
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::touchVertexLastTime(
+  __NAMESPACE__::Vertex&         fineGridVertex,
+  const tarch::la::Vector<DIMENSIONS,double>&                    fineGridX,
+  const tarch::la::Vector<DIMENSIONS,double>&                    fineGridH,
+  __NAMESPACE__::Vertex * const  coarseGridVertices,
+  const peano::grid::VertexEnumerator&          coarseGridVerticesEnumerator,
+  __NAMESPACE__::Cell&           coarseGridCell,
+  const tarch::la::Vector<DIMENSIONS,int>&                       fineGridPositionOfVertex
+) {
+  if (fineGridVertex.PARAM2()) {
+    assertion3(
+      PARAM0::getInstance().isValidIndex( VertexOperations::readPidtVertexIndex( fineGridVertex ) ),
+      fineGridVertex.toString(), fineGridX, fineGridH
+    );
+    
+    tarch::multicore::Lock lock( _gridSemaphore );
+    liftParticles(
+      PARAM0::getInstance().getData( VertexOperations::readPidtVertexIndex( fineGridVertex ) ),
+      coarseGridVertices,
+      coarseGridVerticesEnumerator,
+      fineGridPositionOfVertex
+    );
+    PARAM0::getInstance().getData( VertexOperations::readPidtVertexIndex( fineGridVertex ) ).clear();
+  }
+  else {
+    if ( !coarseGridCell.isRoot() ) {
+    assertion3(
+      PARAM0::getInstance().isValidIndex( VertexOperations::readPidtVertexIndex( fineGridVertex ) ),
+      fineGridVertex.toString(), fineGridX, fineGridH
+    );
+
+      PARAM0::HeapEntries& sourceVertexParticles = PARAM0::getInstance().getData( VertexOperations::readPidtVertexIndex( fineGridVertex ));
+  
+      int numberOfLocalLifts = 0;
+      
+      for (
+        PARAM0::HeapEntries::iterator p = sourceVertexParticles.begin();
+        p!=sourceVertexParticles.end();
+      ) {
+        if (particles::PIDTParticles::isContainedInDualCell(fineGridX,fineGridH,p->_persistentRecords._x)) {
+          p++;
+        }
+        else {
+          const tarch::la::Vector<DIMENSIONS,int> newDualCellOfParticle = particles::PIDTParticles::getDualCellOfParticle(
+            coarseGridVerticesEnumerator,
+            p->_persistentRecords._x
+          );
+  
+          #ifdef Parallel
+          const bool coarseDestinationCellIsLocal = !coarseGridVertices[ coarseGridVerticesEnumerator(newDualCellOfParticle) ].isRemote(_state,true,false);
+          #else
+          const bool coarseDestinationCellIsLocal = true;
+          #endif
+  
+          if (coarseDestinationCellIsLocal) {
+          
+            const int destinationIndex = VertexOperations::readPidtVertexIndex(  coarseGridVertices[ coarseGridVerticesEnumerator(newDualCellOfParticle) ] );
+  
+            assertion( PARAM0::getInstance().isValidIndex( destinationIndex ) );
+  
+            assertion4( 
+              destinationIndex>=0, 
+              fineGridVertex.toString(), coarseGridVertices[ coarseGridVerticesEnumerator(newDualCellOfParticle) ].toString(),
+              p->toString(),
+              "uninitialised coarse grid vertex. Ensure that boundary vertices are initialised and that particles do not leave domain" 
+            );
+  
+            PARAM0::getInstance().getData(destinationIndex).push_back(*p);
+            p = sourceVertexParticles.erase(p);
+
+            numberOfLocalLifts++;
+          }
+          else {
+            const tarch::la::Vector<DIMENSIONS,int> localDualCellOfParticle = particles::PIDTParticles::getDualCellOfParticle(
+              coarseGridVerticesEnumerator,
+              fineGridX
+            );
+  
+            const int destinationIndex = VertexOperations::readPidtVertexIndex( coarseGridVertices[ coarseGridVerticesEnumerator(localDualCellOfParticle) ] );
+
+            assertion( PARAM0::getInstance().isValidIndex( destinationIndex ) );
+
+            PARAM0::getInstance().getData(destinationIndex).push_back(*p);
+            p = sourceVertexParticles.erase(p);
+  
+            numberOfLocalLifts++;
+          }
+        }
+      }
+      
+      tarch::multicore::Lock lock( _globalVariablesSemaphore );
+      particles::PIDTParticles::numberOfLifts += numberOfLocalLifts;
+    }
+  }
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::enterCell(
+      __NAMESPACE__::Cell&                 fineGridCell,
+      __NAMESPACE__::Vertex * const        fineGridVertices,
+      const peano::grid::VertexEnumerator&                fineGridVerticesEnumerator,
+      __NAMESPACE__::Vertex * const        coarseGridVertices,
+      const peano::grid::VertexEnumerator&                coarseGridVerticesEnumerator,
+      __NAMESPACE__::Cell&                 coarseGridCell,
+      const tarch::la::Vector<DIMENSIONS,int>&                             fineGridPositionOfCell
+) {
+  fineGridCell.getCellData().setPidtMaxDx( 0.0 );
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::leaveCell(
+  __NAMESPACE__::Cell&           fineGridCell,
+  __NAMESPACE__::Vertex * const  fineGridVertices,
+  const peano::grid::VertexEnumerator&          fineGridVerticesEnumerator,
+  __NAMESPACE__::Vertex * const  coarseGridVertices,
+  const peano::grid::VertexEnumerator&          coarseGridVerticesEnumerator,
+  __NAMESPACE__::Cell&           coarseGridCell,
+  const tarch::la::Vector<DIMENSIONS,int>&                       fineGridPositionOfCell
+) {
+  if (coarseGridCell.PARAM1()) {
+    double maxDx = 0.0;
+    dfor2(k)
+      const int sourceVertexIndex = VertexOperations::readPidtVertexIndex( fineGridVertices[ fineGridVerticesEnumerator(k) ] );
+  
+      assertion( PARAM0::getInstance().isValidIndex( sourceVertexIndex ) );
+
+      PARAM0::HeapEntries& sourceVertexParticles = PARAM0::getInstance().getData(sourceVertexIndex);
+  
+      for (
+        PARAM0::HeapEntries::iterator p = sourceVertexParticles.begin();
+        p!=sourceVertexParticles.end();
+      ) {
+        const tarch::la::Vector<DIMENSIONS,int> newDualCellOfParticle = particles::PIDTParticles::getDualCellOfParticle(
+          fineGridVerticesEnumerator,
+          p->_persistentRecords._x
+        );
+        
+        assertion1( PARAM4 || p->_persistentRecords._maxDx>=0.0,p->toString() );
+        maxDx = std::max( maxDx, p->_persistentRecords._maxDx );
+  
+        const bool MoveParticleToDifferentDualCell = newDualCellOfParticle!=k;
+        if (MoveParticleToDifferentDualCell) {
+          Vertex& newVertexOfParticles = fineGridVertices[ fineGridVerticesEnumerator(newDualCellOfParticle) ];
+          const int destinationVertexIndex = VertexOperations::readPidtVertexIndex( newVertexOfParticles );
+          assertion( PARAM0::getInstance().isValidIndex( destinationVertexIndex ) );
+          PARAM0::getInstance().getData(destinationVertexIndex).push_back(*p);
+          p = PARAM0::getInstance().getData(sourceVertexIndex).erase(p);
+        }
+        else {
+          p++;
+        }
+      }
+    enddforx
+    
+    fineGridCell.getCellData().setPidtMaxDx( std::max( maxDx,fineGridCell.getCellData().getPidtMaxDx() ) );
+    coarseGridCell.getCellData().setPidtMaxDx( std::max( maxDx,coarseGridCell.getCellData().getPidtMaxDx() ) );
+  }
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::beginIteration(
+  __NAMESPACE__::State&  solverState
+) {
+  PARAM0::getInstance().clearStatistics();
+  
+  #ifdef Parallel
+  _state = solverState;
+  #endif
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::endIteration(
+  __NAMESPACE__::State&  solverState
+) {
+  particles::PIDTParticles::toggleMoveStateOfAdapters();
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::descend(
+  __NAMESPACE__::Cell * const          fineGridCells,
+  __NAMESPACE__::Vertex * const        fineGridVertices,
+  const peano::grid::VertexEnumerator&                fineGridVerticesEnumerator,
+  __NAMESPACE__::Vertex * const        coarseGridVertices,
+  const peano::grid::VertexEnumerator&                coarseGridVerticesEnumerator,
+  __NAMESPACE__::Cell&                 coarseGridCell
+) {
+  if (coarseGridCell.PARAM1()) {
+    double maxDxOfDroppedParticles = 0.0;
+    
+    int numberOfLocalDrops = 0;
+  
+    dfor2(k)
+      assertion( PARAM0::getInstance().isValidIndex( VertexOperations::readPidtVertexIndex( coarseGridVertices[ coarseGridVerticesEnumerator(k) ] ) ));
+
+      PARAM0::HeapEntries& currentCoarseGridParticles = PARAM0::getInstance().getData(
+        VertexOperations::readPidtVertexIndex( coarseGridVertices[ coarseGridVerticesEnumerator(k) ] )
+      );
+  
+      for (
+        PARAM0::HeapEntries::iterator p = currentCoarseGridParticles.begin();
+        p!=currentCoarseGridParticles.end();
+      ) {
+        const bool particleIsContainedInCoarseCell = coarseGridVerticesEnumerator.overlaps(
+          p->_persistentRecords._x,
+          0.0
+        );
+  
+        if (particleIsContainedInCoarseCell) {
+          tarch::la::Vector<DIMENSIONS,int>  destinationVertex = particles::PIDTParticles::getDualCellOfParticleWithinNextFinerLevel(
+            coarseGridVerticesEnumerator,
+            p->_persistentRecords._x
+          );
+          
+          maxDxOfDroppedParticles = std::max( maxDxOfDroppedParticles, p->_persistentRecords._maxDx );
+   
+          const int destinationIndex = VertexOperations::readPidtVertexIndex( fineGridVertices[ fineGridVerticesEnumerator(destinationVertex) ] );
+          assertion( MyParticleHeap::getInstance().isValidIndex( destinationIndex ) );
+          PARAM0::getInstance().getData(destinationIndex).push_back(*p);
+          p = currentCoarseGridParticles.erase(p);
+          numberOfLocalDrops ++;
+        }
+        else {
+          p++;
+        }
+      }
+    enddforx
+    
+    dfor3(l)
+      fineGridCells[ fineGridVerticesEnumerator.cell(l) ].getCellData().setPidtMaxDx( 
+        std::max( 
+          maxDxOfDroppedParticles,   
+          fineGridCells[ fineGridVerticesEnumerator.cell(l) ].getCellData().getPidtMaxDx()
+        )
+      );
+    enddforx
+    
+    tarch::multicore::Lock lock( _globalVariablesSemaphore );
+    particles::PIDTParticles::numberOfDrops += numberOfLocalDrops;
+  }
+}
+
+
+void __THIS_QUALIFIED_TYPENAME__::ascend(
+  __NAMESPACE__::Cell * const    fineGridCells,
+  __NAMESPACE__::Vertex * const  fineGridVertices,
+  const peano::grid::VertexEnumerator&          fineGridVerticesEnumerator,
+  __NAMESPACE__::Vertex * const  coarseGridVertices,
+  const peano::grid::VertexEnumerator&          coarseGridVerticesEnumerator,
+  __NAMESPACE__::Cell&           coarseGridCell
+) {
+}

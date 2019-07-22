@@ -1,0 +1,52 @@
+TODO
+====
+
+This README is still a stub
+
+Solvers used
+============
+
+{% for solver in solverContexts %}
+{{solver.solver}}
+{% for i in range(solver.solver|length) %}-{%endfor%}
+
+
+{% if solver.solverType == "ADER-DG"%}
+### Prerequisite
+
+{% if solver.useFlux or solver.useFluxVect %}
+flux
+{% if solver.useFluxVect %}
+Using vectorized flux, the kernels expect this PDE
+
+```cpp
+void flux_vect(const double* const * const restrict Q, double* const * const * const restrict F, int size);
+```
+{% endif %}
+
+{% endif %}
+{% if solver.useNCP %}
+ncp
+
+{% endif %}
+{% if solver.useFusedSource or solver.useFusedSourceVect%}
+TODO add fusedSource description
+
+{% if solver.useFusedSourceVect %}
+Using vectorized fusedSource, the kernels expect this PDE
+Note that GradQ now follows the same convention as the flux (dimensions are splitted in the first coordinate)
+
+```cpp
+void fusedSourceVect(const double* const * const restrict Q, const double* const * const * const restrict gradQ, double* const * const restrict S, const int size);
+```
+{% else %}
+Using fusedSource, the kernels expect this PDE
+
+```cpp
+void fusedSource(const double* const restrict Q, const double* const restrict gradQ, double* const restrict S);
+```
+{% endif %}
+
+{% endif %}
+{% endif %}{# solver.solverType == "ADER-DG" #}
+{% endfor %}
