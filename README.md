@@ -24,7 +24,7 @@ Now you are ready to compile and run an ExaHyPE application [according to the gu
 
     cd Demonstrators/EulerADERDG
     make
-    ./ExaHyPE-Euler EulerADERDG.exahype
+    ./ExaHyPE-EulerADERDG EulerADERDG.exahype
 
 After the simulation finished you will find some files with the suffix .vtk in The folder Demonstrators/Euler_ADERDG, which you can open in Paraview.
 
