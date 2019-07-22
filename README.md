@@ -9,7 +9,7 @@ On Ivy muc we have to load several modules. Copy this to your .bashrc
     module switch intel/19.0
     module switch mpi.intel/2019
     module load tbb/2019
-    module load python/3.6_intel
+    module load python/3.5_intel
     module load gcc
 
 Copy and paste these commands to start with a working ExaHyPE application and initialize the demo application _Euler_ADERDG_:
