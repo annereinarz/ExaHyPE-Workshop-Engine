@@ -27,8 +27,6 @@ If above doesn't work you might want to try these fixes
 If you don't have a g++ compiler install it via apt-get
 ```sudo apt-get install g++```
 
-You might need to install [Java 1.8](https://www.digitalocean.com/community/tutorials/how-to-install-java-with-apt-get-on-ubuntu-16-04) jre and jdk
-
 To run programms on multiple threads it is **necessary** that you have Intel TBB installed. You can find the most recent version at [TBB](https://github.com/01org/tbb/releases) or run the [installer script](https://gitlab.lrz.de/Ferienakademie18/ExaHyPE-Teaching/blob/master/installTBB.sh).
 
 The installer script will return you some output similar to this (The paths might differ on your machine)
