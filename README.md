@@ -4,13 +4,7 @@ This is the main repository of the ExaHyPE teaching code project.
 
 ## Mini installation guide ##
 
-On Ivy muc we have to load several modules. Copy this to your .bashrc
-
-    module switch intel/19.0
-    module switch mpi.intel/2019
-    module load tbb/2019
-    module load python/3.5_intel
-    module load gcc
+ExaHyPE has several dependencies, when running on your local machine make sure you have either a gcc/5.0 or later or an intel compiler 2018 or later. Alternatively, if you are running on IvyMUC you can use the modules listed in the bashrc file in this repository. Move it to `~/.bashrc` and then run `source ~/.bashrc`. 
 
 Copy and paste these commands to start with a working ExaHyPE application and initialize the demo application _Euler_ADERDG_:
 
@@ -59,11 +53,5 @@ To be able to look at the generated _.vtu_ output it is **necessary** to have [P
 ## Support ##
 We only support default Linux systems like Ubuntu and Mint.
 
-With a few adjustions you can get ExaHyPE running on a Mac: Before compilation hit:
-```bash
-export SHAREDMEM=None
-```
-and in the file ```./ExaHyPE/Makefile``` comment out all lines containing a ```-lrt```
-
-There currently is no support for Windows, please use a virtual machine like [VirtualBox](https://www.virtualbox.org/)
+There currently is no support for Windows or Mac, please use a virtual machine like [VirtualBox](https://www.virtualbox.org/)
 
