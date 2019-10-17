@@ -4,7 +4,7 @@ This is the main repository of the ExaHyPE teaching code project.
 
 ## Mini installation guide ##
 
-ExaHyPE has several dependencies, when running on your local machine make sure you have either a gcc/5.0 or later or an intel compiler 2018 or later. Alternatively, if you are running on IvyMUC you can use the modules listed in the bashrc file in this repository. Move it to `~/.bashrc` and then run `source ~/.bashrc`. 
+ExaHyPE has several dependencies, when running on your local machine make sure you have either a gcc/5.0 or later or an intel compiler 2018 or later. Alternatively, **only if** you are running on IvyMUC you can use the modules listed in the bashrc file in this repository. Move it to `~/.bashrc` and then run `source ~/.bashrc`. 
 
 Copy and paste these commands to start with a working ExaHyPE application and initialize the demo application _Euler_ADERDG_:
 
@@ -27,7 +27,7 @@ If above doesn't work you might want to try these fixes
 If you don't have a g++ compiler install it via apt-get
 ```sudo apt-get install g++```
 
-To run programms on multiple threads it is **necessary** that you have Intel TBB installed. You can find the most recent version at [TBB](https://github.com/01org/tbb/releases) or run the [installer script](https://gitlab.lrz.de/Ferienakademie18/ExaHyPE-Teaching/blob/master/installTBB.sh).
+To run programms on multiple threads it is **necessary** that you have Intel TBB installed. You can find the most recent version at [TBB](https://github.com/01org/tbb/releases) or run the [installer script](https://github.com/annereinarz/ExaHyPE-Workshop-Engine/blob/master/installTBB.sh).
 
 The installer script will return you some output similar to this (The paths might differ on your machine)
 ``` bash
@@ -46,7 +46,7 @@ to ```/home/user/.bashrc``` (If the file doesn't exists create it)
 after that open a new terminal or apply the .bashrc to your current shell:
 ```source /home/user/.bashrc```
 
-To be able to look at the generated _.vtu_ output it is **necessary** to have [Paraview](https://www.paraview.org/download) installed.
+To be able to look at the generated _.vtk_ output it is **necessary** to have [Paraview](https://www.paraview.org/download) installed.
 
 ## Support ##
 We only support default Linux systems like Ubuntu and Mint.
